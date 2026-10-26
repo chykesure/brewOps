@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BootstrapData, ComponentDTO, MachineDTO } from "@/lib/types";
 import { createMachine, createComponent, patchMachine, patchPart } from "@/lib/client-api";
 import { StatusBadge } from "@/components/brewops/status-badge";
@@ -10,18 +10,32 @@ import PmHistoryPanel from "@/components/brewops/pm-history-panel";
 import MachineTag from "@/components/brewops/machine-tag";
 import AssetsImport from "@/components/brewops/assets-import";
 import { STATUS_META, pmCycleLabel, fmtDistance } from "@/lib/status";
+import { suggestMachineCode, suggestComponentPartCode } from "@/lib/machine-code";
 import { getPosition } from "@/lib/client-geo";
 import { toast } from "sonner";
 import {
   ChevronLeft, ChevronRight, Search, Plus, PackageOpen, Wrench, Timer,
   Minus, UserRound, CalendarClock, Boxes, LoaderCircle,
-  QrCode, MapPin, Upload, LocateFixed, ShieldCheck, Keyboard,
+  QrCode, MapPin, Upload, LocateFixed, ShieldCheck, Keyboard, RefreshCw,
 } from "lucide-react";
 
 type Mode =
   | { type: "list" }
-  | { type: "machine"; machineId: string }
+  | { type: "machine"; machineId: string; focusComp?: boolean }
   | { type: "parts" };
+
+// One-tap sub-components — the common equipment every brewery machine carries.
+// Tapping a chip fills the name + category; the part code stays auto-generated.
+const QUICK_COMPONENTS: { name: string; category: string }[] = [
+  { name: "Drive Motor", category: "Rotating" },
+  { name: "Pump Impeller", category: "Rotating" },
+  { name: "Mechanical Seal", category: "Seal" },
+  { name: "Bearing", category: "Bearing" },
+  { name: "Solenoid Valve", category: "Valve" },
+  { name: "Flow Transmitter", category: "Instrument" },
+  { name: "Temperature Probe", category: "Instrument" },
+  { name: "Pressure Gauge", category: "Instrument" },
+];
 
 export default function AdminMachines({ data, refresh }: { data: BootstrapData; refresh: () => void }) {
   const [mode, setMode] = useState<Mode>({ type: "list" });
@@ -35,11 +49,18 @@ export default function AdminMachines({ data, refresh }: { data: BootstrapData; 
   const [tagOpen, setTagOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [locating, setLocating] = useState(false);
+  // Auto-generated machine code — stays editable; any manual keystroke marks it "touched"
+  // so we stop re-suggesting over the Engineer's own text.
+  const [codeTouched, setCodeTouched] = useState(false);
+  const compNameRef = useRef<HTMLInputElement | null>(null);
 
   // new machine form
   const [nm, setNm] = useState({ code: "", name: "", departmentId: "", location: "", ownerId: "", pmCycle: "WEEKLY", pmDay: 1 });
   // new component form
   const [nc, setNc] = useState({ name: "", partCode: "", category: "" });
+  // Auto part code — editable; a manual keystroke marks it "touched" so we stop
+  // re-suggesting over the Engineer's own text.
+  const [partTouched, setPartTouched] = useState(false);
 
   const machine = mode.type === "machine" ? data.machines.find((m) => m.id === mode.machineId) : null;
 
@@ -48,6 +69,45 @@ export default function AdminMachines({ data, refresh }: { data: BootstrapData; 
     data.machines.forEach((m) => set.set(m.departmentId, m.departmentName));
     return Array.from(set.entries());
   }, [data.machines]);
+
+  const deptName = (id: string) => depts.find(([did]) => did === id)?.[1] ?? null;
+  const regenCode = (departmentId?: string) => {
+    setNm((s) => ({ ...s, code: suggestMachineCode(deptName(departmentId ?? s.departmentId), data.machines) }));
+    setCodeTouched(false);
+  };
+
+  // When the register panel opens, hand the Engineer a fresh code straight away
+  const openAddMachine = () => {
+    const opening = !addMachineOpen;
+    setAddMachineOpen(opening);
+    if (opening && !codeTouched) {
+      setNm((s) => ({ ...s, code: s.code.trim() ? s.code : suggestMachineCode(null, data.machines) }));
+    }
+  };
+
+  // After registering, the Registry jumps into the new machine so the Engineer
+  // can wire up its sub-components immediately (form is auto-focused).
+  useEffect(() => {
+    if (mode.type === "machine" && mode.focusComp) {
+      const t = setTimeout(() => compNameRef.current?.focus(), 300);
+      return () => clearTimeout(t);
+    }
+  }, [mode]);
+
+  // Opening a machine hands the Engineer a fresh letters+numbers part code
+  // (CP-7K3M style) for the next sub-component — the code input never blocks.
+  const openMachineId = mode.type === "machine" ? mode.machineId : null;
+  useEffect(() => {
+    if (!openMachineId) return;
+    setPartTouched(false);
+    setNc((s) => ({ ...s, partCode: s.partCode.trim() ? s.partCode : suggestComponentPartCode(data.machines) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openMachineId]);
+
+  const regenPartCode = () => {
+    setPartTouched(false);
+    setNc((s) => ({ ...s, partCode: suggestComponentPartCode(data.machines) }));
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -66,21 +126,25 @@ export default function AdminMachines({ data, refresh }: { data: BootstrapData; 
   };
 
   const saveMachine = async () => {
-    if (!nm.code.trim() || !nm.name.trim() || !nm.departmentId) {
-      toast.error("Code, name and department are required");
+    if (!nm.name.trim() || !nm.departmentId) {
+      toast.error("Name and department are required");
       return;
     }
     setBusy(true);
     try {
-      await createMachine({
-        code: nm.code, name: nm.name, departmentId: nm.departmentId,
+      const created = await createMachine({
+        code: nm.code.trim() || undefined, name: nm.name, departmentId: nm.departmentId,
         location: nm.location || undefined, ownerId: nm.ownerId || undefined,
         pmCycle: nm.pmCycle, pmDay: Number(nm.pmDay),
       });
-      toast.success(`${nm.code.toUpperCase()} registered`);
+      toast.success(`${created.code} registered`, {
+        description: "Now add its sub-components — motors, seals, sensors…",
+      });
       setAddMachineOpen(false);
       setNm({ code: "", name: "", departmentId: "", location: "", ownerId: "", pmCycle: "WEEKLY", pmDay: 1 });
+      setCodeTouched(false);
       refresh();
+      setMode({ type: "machine", machineId: created.id, focusComp: true });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not register machine");
     } finally {
@@ -95,9 +159,12 @@ export default function AdminMachines({ data, refresh }: { data: BootstrapData; 
     }
     setBusy(true);
     try {
-      await createComponent({ machineId: machine.id, name: nc.name, partCode: nc.partCode || undefined, category: nc.category || undefined });
-      toast.success(`${nc.name} added to ${machine.code}`);
-      setNc({ name: "", partCode: "", category: "" });
+      const created = await createComponent({ machineId: machine.id, name: nc.name, partCode: nc.partCode || undefined, category: nc.category || undefined });
+      toast.success(`${nc.name} added to ${machine.code}`, {
+        description: `Part code ${created.partCode ?? nc.partCode} · visible on the Engineer and Artisan dashboards now`,
+      });
+      setNc({ name: "", partCode: suggestComponentPartCode(data.machines), category: "" });
+      setPartTouched(false);
       refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not add component");
@@ -194,6 +261,22 @@ export default function AdminMachines({ data, refresh }: { data: BootstrapData; 
   }
 
   // ---------- Machine detail ----------
+  // Registered a moment ago and the fresh bootstrap hasn't landed yet — show a
+  // loading card instead of flashing back to the list.
+  if (mode.type === "machine" && !machine) {
+    return (
+      <div className="p-4 md:p-6 md:max-w-3xl space-y-3">
+        <button onClick={() => setMode({ type: "list" })} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+          <ChevronLeft className="h-4 w-4" /> Registry
+        </button>
+        <div className="rounded-2xl border border-border bg-card p-8 text-center">
+          <LoaderCircle className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
+          <p className="text-xs text-muted-foreground mt-2">Opening the new machine…</p>
+        </div>
+      </div>
+    );
+  }
+
   if (mode.type === "machine" && machine) {
     const grouped = machine.components.reduce<Record<string, ComponentDTO[]>>((acc, c) => {
       const key = c.category ?? "Other";
@@ -260,12 +343,26 @@ export default function AdminMachines({ data, refresh }: { data: BootstrapData; 
           </div>
         </div>
 
-        {/* Add component */}
+        {/* Add component — auto part code + one-tap common sub-components */}
         <div className="rounded-xl border border-border bg-card p-3 space-y-2">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Add component</p>
-          <input value={nc.name} onChange={(e) => setNc({ ...nc, name: e.target.value })} placeholder="Name (e.g. Mechanical Seal)" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
+          <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Add sub-component under {machine.code}</p>
+          <input ref={compNameRef} value={nc.name} onChange={(e) => setNc({ ...nc, name: e.target.value })} placeholder="Name (e.g. Mechanical Seal)" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
+          <div className="flex gap-1.5 flex-wrap">
+            {QUICK_COMPONENTS.map((q) => (
+              <button key={q.name} type="button" onClick={() => setNc((s) => ({ ...s, name: q.name, category: q.category }))}
+                className="h-7 px-2.5 rounded-full border border-border bg-secondary/60 text-[10.5px] font-semibold text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
+                {q.name}
+              </button>
+            ))}
+          </div>
           <div className="grid grid-cols-2 gap-2">
-            <input value={nc.partCode} onChange={(e) => setNc({ ...nc, partCode: e.target.value })} placeholder="Part code" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
+            <div className="relative">
+              <input value={nc.partCode} onChange={(e) => { setNc({ ...nc, partCode: e.target.value.toUpperCase() }); setPartTouched(true); }} placeholder="Auto code (editable)" className="w-full h-10 rounded-lg bg-background border border-input pl-3 pr-9 text-sm font-mono outline-none focus:ring-2 focus:ring-primary/50" />
+              <button type="button" onClick={regenPartCode} title="Generate a fresh code"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 h-7 w-7 rounded-md bg-secondary border border-border flex items-center justify-center hover:bg-accent">
+                <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            </div>
             <input value={nc.category} onChange={(e) => setNc({ ...nc, category: e.target.value })} placeholder="Category" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
           </div>
           <button onClick={saveComponent} disabled={busy} className="w-full h-10 rounded-lg bg-primary text-primary-foreground text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-50">
@@ -274,7 +371,10 @@ export default function AdminMachines({ data, refresh }: { data: BootstrapData; 
         </div>
 
         {machine.components.length === 0 ? (
-          <p className="text-xs text-muted-foreground text-center py-8 rounded-xl border border-border bg-card">No components yet.</p>
+          <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 text-center">
+            <p className="text-xs font-bold text-primary">No sub-components yet</p>
+            <p className="text-[10.5px] text-muted-foreground mt-1">Add the first one above — e.g. Mechanical Seal, Drive Motor, Flow Transmitter. Every component you add appears on both dashboards and in the daily round.</p>
+          </div>
         ) : (
           Object.entries(grouped).map(([cat, comps]) => (
             <div key={cat}>
@@ -379,7 +479,7 @@ export default function AdminMachines({ data, refresh }: { data: BootstrapData; 
       </div>
 
       <button
-        onClick={() => setAddMachineOpen((v) => !v)}
+        onClick={openAddMachine}
         className="w-full h-11 rounded-xl border border-primary/40 bg-primary/5 text-xs font-semibold text-primary hover:bg-primary/10 transition-colors flex items-center justify-center gap-1.5"
       >
         <Plus className="h-4 w-4" /> Register new machine
@@ -404,11 +504,17 @@ export default function AdminMachines({ data, refresh }: { data: BootstrapData; 
       {addMachineOpen && (
         <div className="rounded-xl border border-border bg-card p-3 space-y-2 md:max-w-3xl">
           <div className="grid grid-cols-2 gap-2">
-            <input value={nm.code} onChange={(e) => setNm({ ...nm, code: e.target.value })} placeholder="Code (P-101)" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
+            <div className="relative">
+              <input value={nm.code} onChange={(e) => { setNm({ ...nm, code: e.target.value }); setCodeTouched(true); }} placeholder="Auto code (editable)" className="w-full h-10 rounded-lg bg-background border border-input pl-3 pr-9 text-sm font-mono outline-none focus:ring-2 focus:ring-primary/50" />
+              <button type="button" onClick={() => regenCode()} title="Generate a fresh code"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 h-7 w-7 rounded-md bg-secondary border border-border flex items-center justify-center hover:bg-accent">
+                <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            </div>
             <input value={nm.name} onChange={(e) => setNm({ ...nm, name: e.target.value })} placeholder="Machine name" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <select value={nm.departmentId} onChange={(e) => setNm({ ...nm, departmentId: e.target.value })} className="w-full h-10 rounded-lg bg-background border border-input px-2 text-sm outline-none">
+            <select value={nm.departmentId} onChange={(e) => { const v = e.target.value; if (!codeTouched) regenCode(v); setNm((s) => ({ ...s, departmentId: v })); }} className="w-full h-10 rounded-lg bg-background border border-input px-2 text-sm outline-none">
               <option value="">Department…</option>
               {depts.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
             </select>

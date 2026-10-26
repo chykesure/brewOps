@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
+import SwRegister from "@/components/brewops/sw-register";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -18,7 +19,7 @@ export const metadata: Metadata = {
   description:
     "Every machine owned. Every task tracked. Every action timestamped. Mobile-first component status rounds, work orders & PM scheduling for the brewhouse.",
   manifest: "/manifest.webmanifest",
-  icons: { icon: "/icon.svg", apple: "/icon.svg" },
+  icons: { icon: "/icon.svg", apple: "/icons/apple-touch-icon.png" },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
@@ -44,6 +45,7 @@ export default function RootLayout({
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}>
         {children}
         <Toaster position="top-center" richColors closeButton />
+        <SwRegister />
       </body>
     </html>
   );

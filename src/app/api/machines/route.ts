@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSessionUser } from "@/lib/session";
 import { isPmCycle } from "@/lib/types";
+import { deptPrefixFromName, nextMachineCode } from "@/lib/machine-code";
 
 // POST /api/machines — register a machine.
 // The Engineer registers from the Registry; Artisans register from the shop floor
@@ -17,10 +18,10 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { code, name, departmentId, departmentName, location, ownerId, pmCycle, pmDay } = body ?? {};
-    if (!code || !name) return NextResponse.json({ error: "Machine code and name are required." }, { status: 400 });
+    if (!name) return NextResponse.json({ error: "Machine name is required." }, { status: 400 });
 
     // Department: explicit id, or a name typed on the floor (find-or-create, like bulk import)
-    let dept: { id: string } | null = null;
+    let dept: { id: string; name: string } | null = null;
     if (departmentId) dept = await db.department.findUnique({ where: { id: String(departmentId) } });
     if (!dept && departmentName) {
       const dName = String(departmentName).trim().slice(0, 60);
@@ -32,9 +33,18 @@ export async function POST(req: NextRequest) {
 
     const isArtisan = user.role !== "ADMIN";
 
+    // Code: client normally sends an auto-suggested one; if omitted (or blank)
+    // the server generates the next free code from the department name so the
+    // field never blocks a registration from the shop floor.
+    let machineCode = String(code ?? "").trim().toUpperCase().slice(0, 20);
+    if (!machineCode) {
+      const all = await db.machine.findMany({ select: { code: true } });
+      machineCode = nextMachineCode(deptPrefixFromName(dept.name), all.map((m) => m.code));
+    }
+
     const machine = await db.machine.create({
       data: {
-        code: String(code).trim().toUpperCase().slice(0, 20),
+        code: machineCode,
         name: String(name).trim().slice(0, 80),
         departmentId: dept.id,
         location: location ? String(location).slice(0, 80) : null,
@@ -43,7 +53,7 @@ export async function POST(req: NextRequest) {
         pmDay: Number.isFinite(Number(pmDay)) ? Math.min(31, Math.max(1, Number(pmDay))) : 1,
       },
     });
-    return NextResponse.json({ ok: true, id: machine.id });
+    return NextResponse.json({ ok: true, id: machine.id, code: machine.code });
   } catch (e) {
     if ((e as { code?: string })?.code === "P2002") {
       return NextResponse.json({ error: "That machine code is already registered." }, { status: 409 });

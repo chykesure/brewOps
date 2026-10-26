@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BootstrapData, ComponentDTO, MachineDTO, StatusLogDTO } from "@/lib/types";
 import { StatusBadge } from "@/components/brewops/status-badge";
 import StatusPickerSheet from "@/components/brewops/status-picker-sheet";
@@ -8,14 +8,28 @@ import ComponentHistorySheet from "@/components/brewops/component-history-sheet"
 import PmHistoryPanel from "@/components/brewops/pm-history-panel";
 import MachineStatusReport from "@/components/brewops/machine-status-report";
 import { STATUS_META, pmCycleLabel } from "@/lib/status";
+import { suggestMachineCode, suggestComponentPartCode } from "@/lib/machine-code";
 import { createComponent, createMachine } from "@/lib/client-api";
 import { toast } from "sonner";
 import {
   ChevronLeft, ChevronRight, Search, Radar, CheckCircle2, Circle, Wrench,
-  PackageOpen, Lock, Plus, MapPin, CalendarClock, History, X, LoaderCircle, FileText, ListTree,
+  PackageOpen, Lock, Plus, MapPin, CalendarClock, History, X, LoaderCircle, FileText, ListTree, RefreshCw,
 } from "lucide-react";
 
 type ViewMode = { type: "list" } | { type: "machine"; machineId: string };
+
+// One-tap sub-components — the common equipment every brewery machine carries.
+// Tapping a chip fills the name + category; the part code stays auto-generated.
+const QUICK_COMPONENTS: { name: string; category: string }[] = [
+  { name: "Drive Motor", category: "Rotating" },
+  { name: "Pump Impeller", category: "Rotating" },
+  { name: "Mechanical Seal", category: "Seal" },
+  { name: "Bearing", category: "Bearing" },
+  { name: "Solenoid Valve", category: "Valve" },
+  { name: "Flow Transmitter", category: "Instrument" },
+  { name: "Temperature Probe", category: "Instrument" },
+  { name: "Pressure Gauge", category: "Instrument" },
+];
 
 export default function RoundView({
   data, refresh, startMode, onConsumeStart,
@@ -34,6 +48,8 @@ export default function RoundView({
   const [history, setHistory] = useState<{ comp: ComponentDTO | null; logs: StatusLogDTO[] }>({ comp: null, logs: [] });
   const [addOpen, setAddOpen] = useState(false);
   const [newComp, setNewComp] = useState({ name: "", partCode: "", category: "" });
+  // Auto part code — editable; a manual keystroke stops the auto-suggestion
+  const [partTouched, setPartTouched] = useState(false);
   const [pmOpen, setPmOpen] = useState(false);
   // Printable status log report (last 7 days, company letterhead)
   const [printOpen, setPrintOpen] = useState(false);
@@ -41,6 +57,9 @@ export default function RoundView({
   const [regOpen, setRegOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [nm, setNm] = useState({ code: "", name: "", departmentId: "", newDept: "", location: "", pmCycle: "NONE" });
+  // Auto code — editable; manual keystrokes stop the auto-suggestion
+  const [codeTouched, setCodeTouched] = useState(false);
+  const compNameRef = useRef<HTMLInputElement | null>(null);
 
   const isAdmin = data.user.role === "ADMIN";
   const machine = view.type === "machine" ? data.machines.find((m) => m.id === view.machineId) : null;
@@ -113,11 +132,46 @@ export default function RoundView({
     setHistory({ comp, logs });
   };
 
+  const deptName = (id: string) => depts.find(([did]) => did === id)?.[1] ?? null;
+  const suggestFor = (departmentId: string, newDeptText?: string) =>
+    suggestMachineCode(
+      departmentId === "__new" ? ((newDeptText ?? nm.newDept).trim() || null) : deptName(departmentId),
+      data.machines,
+    );
+  const regenCode = () => {
+    setNm((s) => ({ ...s, code: suggestFor(s.departmentId) }));
+    setCodeTouched(false);
+  };
+  // Opening the floor registration panel hands the artisan a fresh code right away
+  const openRegister = () => {
+    const opening = !regOpen;
+    setRegOpen(opening);
+    if (opening && !codeTouched) {
+      setNm((s) => ({ ...s, code: s.code.trim() ? s.code : suggestMachineCode(null, data.machines) }));
+    }
+  };
+
+  // Focus the component name input whenever the add-component panel opens on a machine
+  useEffect(() => {
+    if (view.type === "machine" && addOpen) {
+      const t = setTimeout(() => compNameRef.current?.focus(), 300);
+      // Hand the floor crew a fresh letters+numbers part code (CP-7K3M style) —
+      // the code input never blocks a registration from the floor.
+      if (!partTouched) setNewComp((s) => ({ ...s, partCode: s.partCode.trim() ? s.partCode : suggestComponentPartCode(data.machines) }));
+      return () => clearTimeout(t);
+    }
+  }, [view, addOpen]);
+
+  const regenPartCode = () => {
+    setPartTouched(false);
+    setNewComp((s) => ({ ...s, partCode: suggestComponentPartCode(data.machines) }));
+  };
+
   const isNewDept = nm.departmentId === "__new";
 
   const saveMachine = async () => {
-    if (!nm.code.trim() || !nm.name.trim()) {
-      toast.error("Machine code and name are required");
+    if (!nm.name.trim()) {
+      toast.error("Machine name is required");
       return;
     }
     if (!nm.departmentId || (isNewDept && !nm.newDept.trim())) {
@@ -126,19 +180,23 @@ export default function RoundView({
     }
     setBusy(true);
     try {
-      const code = nm.code.trim().toUpperCase();
-      await createMachine({
-        code: nm.code, name: nm.name,
+      const created = await createMachine({
+        code: nm.code.trim() || undefined, name: nm.name,
         ...(isNewDept ? { departmentName: nm.newDept } : { departmentId: nm.departmentId }),
         location: nm.location || undefined,
         pmCycle: nm.pmCycle,
       });
-      toast.success(`${code} registered`, {
-        description: "It is now in your round. Open it and add its components.",
+      toast.success(`${created.code} registered`, {
+        description: "It is now in your round — add its components below.",
       });
       setNm({ code: "", name: "", departmentId: "", newDept: "", location: "", pmCycle: "NONE" });
+      setCodeTouched(false);
       setRegOpen(false);
       refresh();
+      // Jump straight into the new machine so the floor crew can wire up its
+      // sub-components while they are still standing in front of it.
+      setView({ type: "machine", machineId: created.id });
+      setAddOpen(true);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not register the machine");
     } finally {
@@ -146,8 +204,24 @@ export default function RoundView({
     }
   };
 
+  // ---------- Machine detail ----------
+  // Just registered and the fresh bootstrap hasn't landed yet — hold on a loading card.
+  if (view.type === "machine" && !machine) {
+    return (
+      <div className="p-4 md:p-6 md:max-w-3xl space-y-3">
+        <button onClick={() => setView({ type: "list" })} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
+          <ChevronLeft className="h-4 w-4" /> All machines
+        </button>
+        <div className="rounded-2xl border border-border bg-card p-8 text-center">
+          <LoaderCircle className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
+          <p className="text-xs text-muted-foreground mt-2">Opening the new machine…</p>
+        </div>
+      </div>
+    );
+  }
+
   // ---------- Machine list ----------
-  if (view.type === "list" || !machine) {
+  if (view.type === "list") {
     return (
       <div className="p-4 md:p-6 space-y-3">
         <div className="flex items-start justify-between gap-2 flex-wrap">
@@ -203,7 +277,7 @@ export default function RoundView({
 
         {/* Shop-floor registration — the floor crew spots new equipment before anyone */}
         <button
-          onClick={() => setRegOpen((v) => !v)}
+          onClick={openRegister}
           className="w-full h-11 rounded-xl border border-primary/40 bg-primary/5 text-xs font-semibold text-primary hover:bg-primary/10 transition-colors flex items-center justify-center gap-1.5"
         >
           <Plus className="h-4 w-4" /> Register new machine
@@ -212,17 +286,23 @@ export default function RoundView({
         {regOpen && (
           <div className="rounded-xl border border-border bg-card p-3 space-y-2 md:max-w-3xl">
             <div className="grid grid-cols-2 gap-2">
-              <input value={nm.code} onChange={(e) => setNm({ ...nm, code: e.target.value })} placeholder="Code (P-101)" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
+              <div className="relative">
+                <input value={nm.code} onChange={(e) => { setNm({ ...nm, code: e.target.value }); setCodeTouched(true); }} placeholder="Auto code (editable)" className="w-full h-10 rounded-lg bg-background border border-input pl-3 pr-9 text-sm font-mono outline-none focus:ring-2 focus:ring-primary/50" />
+                <button type="button" onClick={regenCode} title="Generate a fresh code"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 h-7 w-7 rounded-md bg-secondary border border-border flex items-center justify-center hover:bg-accent">
+                  <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+              </div>
               <input value={nm.name} onChange={(e) => setNm({ ...nm, name: e.target.value })} placeholder="Machine name" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <select value={nm.departmentId} onChange={(e) => setNm({ ...nm, departmentId: e.target.value })} className="w-full h-10 rounded-lg bg-background border border-input px-2 text-sm outline-none">
+              <select value={nm.departmentId} onChange={(e) => { const v = e.target.value; if (!codeTouched) setNm((s) => ({ ...s, departmentId: v, code: suggestFor(v) })); else setNm({ ...nm, departmentId: v }); }} className="w-full h-10 rounded-lg bg-background border border-input px-2 text-sm outline-none">
                 <option value="">Department…</option>
                 {depts.map(([id, dname]) => <option key={id} value={id}>{dname}</option>)}
                 <option value="__new">New department…</option>
               </select>
               {isNewDept ? (
-                <input value={nm.newDept} onChange={(e) => setNm({ ...nm, newDept: e.target.value })} placeholder="New department name" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
+                <input value={nm.newDept} onChange={(e) => { const v = e.target.value; if (!codeTouched) setNm((s) => ({ ...s, newDept: v, code: suggestFor("__new", v) })); else setNm({ ...nm, newDept: v }); }} placeholder="New department name" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
               ) : (
                 <input value={nm.location} onChange={(e) => setNm({ ...nm, location: e.target.value })} placeholder="Location (optional)" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
               )}
@@ -413,6 +493,8 @@ export default function RoundView({
   }
 
   // ---------- Machine detail ----------
+  // (Unreachable in practice — the two guards above returned for every other case.)
+  if (!machine) return null;
   const canEditMachine = isAdmin || machine.ownerId === data.user.id;
   // The whole plant reports here: every machine, valve, instrument and component is
   // on everyone's round, so the Engineer can direct any artisan anywhere. The log
@@ -431,9 +513,12 @@ export default function RoundView({
       return;
     }
     try {
-      await createComponent({ machineId: machine.id, name: newComp.name, partCode: newComp.partCode || undefined, category: newComp.category || undefined });
-      toast.success(`${newComp.name} added to ${machine.code}`);
-      setNewComp({ name: "", partCode: "", category: "" });
+      const created = await createComponent({ machineId: machine.id, name: newComp.name, partCode: newComp.partCode || undefined, category: newComp.category || undefined });
+      toast.success(`${newComp.name} added to ${machine.code}`, {
+        description: `Part code ${created.partCode ?? newComp.partCode} · the Engineer sees it on their dashboard now`,
+      });
+      setNewComp({ name: "", partCode: suggestComponentPartCode(data.machines), category: "" });
+      setPartTouched(false);
       setAddOpen(false);
       refresh();
     } catch (e) {
@@ -505,15 +590,29 @@ export default function RoundView({
           onClick={() => setAddOpen((v) => !v)}
           className="w-full h-10 rounded-xl border border-border text-xs font-semibold text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors flex items-center justify-center gap-1.5"
         >
-          <Plus className="h-4 w-4" /> Add component to {machine.code}
+          <Plus className="h-4 w-4" /> Add sub-component to {machine.code}
         </button>
       )}
 
       {addOpen && canEditMachine && (
         <div className="rounded-xl border border-border bg-card p-3 space-y-2">
-          <input value={newComp.name} onChange={(e) => setNewComp({ ...newComp, name: e.target.value })} placeholder="Component name (e.g. Drive Motor)" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
+          <input ref={compNameRef} value={newComp.name} onChange={(e) => setNewComp({ ...newComp, name: e.target.value })} placeholder="Component name (e.g. Drive Motor)" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
+          <div className="flex gap-1.5 flex-wrap">
+            {QUICK_COMPONENTS.map((q) => (
+              <button key={q.name} type="button" onClick={() => setNewComp((s) => ({ ...s, name: q.name, category: q.category }))}
+                className="h-7 px-2.5 rounded-full border border-border bg-secondary/60 text-[10.5px] font-semibold text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
+                {q.name}
+              </button>
+            ))}
+          </div>
           <div className="grid grid-cols-2 gap-2">
-            <input value={newComp.partCode} onChange={(e) => setNewComp({ ...newComp, partCode: e.target.value })} placeholder="Part code" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
+            <div className="relative">
+              <input value={newComp.partCode} onChange={(e) => { setNewComp({ ...newComp, partCode: e.target.value.toUpperCase() }); setPartTouched(true); }} placeholder="Auto code (editable)" className="w-full h-10 rounded-lg bg-background border border-input pl-3 pr-9 text-sm font-mono outline-none focus:ring-2 focus:ring-primary/50" />
+              <button type="button" onClick={regenPartCode} title="Generate a fresh code"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 h-7 w-7 rounded-md bg-secondary border border-border flex items-center justify-center hover:bg-accent">
+                <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            </div>
             <input value={newComp.category} onChange={(e) => setNewComp({ ...newComp, category: e.target.value })} placeholder="Category" className="w-full h-10 rounded-lg bg-background border border-input px-3 text-sm outline-none focus:ring-2 focus:ring-primary/50" />
           </div>
           <button onClick={addComponent} className="w-full h-10 rounded-lg bg-primary text-primary-foreground text-sm font-bold">Save component</button>
@@ -521,9 +620,10 @@ export default function RoundView({
       )}
 
       {machine.components.length === 0 ? (
-        <p className="text-xs text-muted-foreground text-center py-10 rounded-xl border border-border bg-card">
-          No components registered yet{canEditMachine ? ". Add the first one above." : "."}
-        </p>
+        <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 text-center">
+          <p className="text-xs font-bold text-primary">No sub-components yet</p>
+          <p className="text-[10.5px] text-muted-foreground mt-1">Add the first one above — e.g. Mechanical Seal, Drive Motor, Flow Transmitter. Everything you add is seen by the Engineer on their dashboard too.</p>
+        </div>
       ) : (
         Object.entries(grouped).map(([cat, comps]) => (
           <div key={cat}>

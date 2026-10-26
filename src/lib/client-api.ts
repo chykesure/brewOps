@@ -213,22 +213,22 @@ export async function patchMachine(id: string, payload: Record<string, unknown>)
   await handle(res);
 }
 
-export async function createMachine(payload: Record<string, unknown>): Promise<void> {
+export async function createMachine(payload: Record<string, unknown>): Promise<{ id: string; code: string }> {
   const res = await fetch("/api/machines", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  await handle(res);
+  return handle<{ ok: boolean; id: string; code: string }>(res);
 }
 
-export async function createComponent(payload: Record<string, unknown>): Promise<void> {
+export async function createComponent(payload: Record<string, unknown>): Promise<{ partCode: string | null }> {
   const res = await fetch("/api/components", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  await handle(res);
+  return handle<{ ok: boolean; id: string; partCode: string | null }>(res);
 }
 
 export async function patchPart(id: string, payload: Record<string, unknown>): Promise<void> {
