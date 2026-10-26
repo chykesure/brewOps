@@ -29,6 +29,7 @@ WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
+    HOSTNAME=0.0.0.0 \
     DATA_DIR=/data
 
 # openssl + CA certs for the Prisma engines; Prisma CLI (global) for schema sync
