@@ -20,10 +20,39 @@ async function handle<T>(res: Response): Promise<T> {
 }
 
 // ---- Device fingerprint (device-synchronization model) ----
-// A stable UUID kept in localStorage identifies this browser/device. The server
-// keeps a trusted-device registry keyed by it: a synchronized device signs in
-// with the PIN; a new one must prove ownership with the work password.
+// A stable UUID kept in localStorage AND mirrored in a cookie identifies this
+// browser/device. The server keeps a trusted-device registry keyed by it: a
+// synchronized device signs in with the PIN; a new one must prove ownership
+// with the work password.
+//
+// Why two stores: if the id ever changed, the server saw a "new device" and
+// demanded the sync password AGAIN. localStorage alone is fragile (iOS clears
+// it aggressively, private tabs lose it, quota errors wipe it) — the cookie
+// mirror heals a wiped store on the next load. If BOTH stores are blocked
+// (strict private browsing), we fall back to a STABLE label instead of the
+// old anon-<timestamp>, which regenerating every login made BrewOps ask for
+// the password on EVERY sign-in.
 const DEVICE_KEY = "brewops_device_id";
+const EPHEMERAL_DEVICE_ID = "ephemeral-device"; // constant ≥8 chars — survives only within a private session's trust window
+
+function readDeviceCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  try {
+    const hit = document.cookie.split("; ").find((c) => c.startsWith(`${DEVICE_KEY}=`));
+    return hit ? decodeURIComponent(hit.slice(DEVICE_KEY.length + 1)) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDeviceCookie(id: string): boolean {
+  try {
+    document.cookie = `${DEVICE_KEY}=${encodeURIComponent(id)}; path=/; max-age=31536000; samesite=lax`;
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export interface DeviceInfo {
   id: string;
@@ -43,16 +72,32 @@ function devicePlatform(ua: string): string {
 
 export function getDeviceInfo(): DeviceInfo {
   const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  // 1. Recover the id from whichever store still has it (localStorage first,
+  //    cookie as the backstop) — a wiped store heals itself from the other.
   let id = "";
   try {
     id = localStorage.getItem(DEVICE_KEY) ?? "";
-    if (!id) {
-      id = (crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
-      localStorage.setItem(DEVICE_KEY, id);
-    }
   } catch {
-    id = `anon-${Date.now().toString(36)}`;
+    id = "";
   }
+  if (!id) id = readDeviceCookie() ?? "";
+  // 2. First visit on this browser — mint a fresh UUID.
+  if (!id) {
+    id = (crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
+  }
+  // 3. Write it back to BOTH stores so it survives whichever one gets wiped.
+  let stored = false;
+  try {
+    localStorage.setItem(DEVICE_KEY, id);
+    stored = true;
+  } catch {
+    stored = false;
+  }
+  const cookieOk = writeDeviceCookie(id);
+  // 4. Every store blocked (strict private mode) — a STABLE label beats a
+  //    regenerating one: the password is asked once, then the server row for
+  //    this fingerprint keeps matching.
+  if (!stored && !cookieOk) id = EPHEMERAL_DEVICE_ID;
   const platform = devicePlatform(ua);
   const mobile = /Mobi|Android|iPhone|iPad/i.test(ua);
   const browser = /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : /Firefox\//.test(ua) ? "Firefox" : "Browser";
@@ -377,6 +422,8 @@ export interface DevStats {
 export interface DevLicenseUser {
   id: string; name: string; email: string; role: string; trade: string | null; shift: string | null;
   active: boolean; licenseKey: string | null; licenseActive: boolean; createdAt: string;
+  hasPassword: boolean; // sync password set? (gates new-device synchronization)
+  pwdChangedAt: string | null;
 }
 
 // ---- Dev console Pro: trends, sessions, restore points, audit trail ----
@@ -452,9 +499,29 @@ export async function devLicenses(): Promise<{ users: DevLicenseUser[] }> {
   return handle(await fetch("/api/dev/licenses", { cache: "no-store" }));
 }
 
-export async function devLicensePatch(payload: { userId?: string; licenseActive?: boolean; regenerate?: boolean; fillMissing?: boolean }): Promise<{ ok: boolean; filled?: number; licenseKey?: string }> {
+export async function devLicensePatch(payload: { userId?: string; licenseActive?: boolean; regenerate?: boolean; fillMissing?: boolean; passwordAction?: "regenerate" | "set"; password?: string }): Promise<{ ok: boolean; filled?: number; licenseKey?: string; password?: string }> {
   return handle(await fetch("/api/dev/licenses", {
     method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+}
+
+// ---- Dev console: selective data wipes (Data tab) ----
+
+export interface DevDataCounts {
+  counts: Record<string, number>;
+  machines: { id: string; code: string; name: string; department: string; components: number }[];
+  photos: { files: number; bytes: number };
+}
+
+export async function devDataCounts(): Promise<DevDataCounts> {
+  return handle(await fetch("/api/dev/data-clear", { cache: "no-store" }));
+}
+
+export async function devDataClear(payload: { entity: string; machineId?: string; confirm: string }): Promise<{ ok: boolean; deleted: Record<string, number> }> {
+  return handle(await fetch("/api/dev/data-clear", {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   }));

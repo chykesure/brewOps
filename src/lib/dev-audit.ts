@@ -12,9 +12,11 @@ export const DEV_ACTIONS = [
   "SNAPSHOT_CREATED", "SNAPSHOT_RESTORED", "SNAPSHOT_DELETED",
   "RESET_ACTIVITY", "RESET_FACTORY",
   "LICENSE_ACTIVATE", "LICENSE_DEACTIVATE", "LICENSE_REGENERATE", "LICENSE_FILL",
+  "SYNC_PASSWORD_SET", "SYNC_PASSWORD_REGENERATE",
   "SESSION_REVOKED", "SESSIONS_PURGED", "DEVICE_REVOKED",
   "MAINTENANCE_ON", "MAINTENANCE_OFF", "AUDIT_CLEARED",
   "QUICKSIGNIN_SHOW", "QUICKSIGNIN_HIDE",
+  "DATA_CLEARED",
 ] as const;
 
 export type DevAction = (typeof DEV_ACTIONS)[number];
@@ -44,6 +46,9 @@ export function devActionMeta(action: string): { label: string; tone: "ok" | "wa
     case "LICENSE_DEACTIVATE": return { label: "License deactivated", tone: "warn" };
     case "LICENSE_REGENERATE": return { label: "License key reissued", tone: "warn" };
     case "LICENSE_FILL": return { label: "Missing keys issued", tone: "ok" };
+    case "SYNC_PASSWORD_SET": return { label: "Sync password set", tone: "warn" };
+    case "SYNC_PASSWORD_REGENERATE": return { label: "Sync password reissued", tone: "warn" };
+    case "DATA_CLEARED": return { label: "Selective data wipe", tone: "danger" };
     case "SESSION_REVOKED": return { label: "Session revoked", tone: "warn" };
     case "SESSIONS_PURGED": return { label: "Sessions purged", tone: "danger" };
     case "DEVICE_REVOKED": return { label: "Device revoked", tone: "warn" };

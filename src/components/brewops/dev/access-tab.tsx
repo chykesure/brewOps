@@ -1,8 +1,8 @@
 "use client";
 
 // Access tab — the license desk (with an at-a-glance activation overview)
-// plus the live sessions & trusted-devices manager with remote revocation.
-import { useCallback, useEffect, useMemo, useState } from "react";
+// plus the device sync-password desk, live sessions & trusted-devices manager.
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   KeyRound, Laptop, LoaderCircle, LogOut, MonitorSmartphone, RotateCcw, Search, ShieldCheck, Users,
@@ -38,6 +38,11 @@ export default function AccessTab({ onChanged }: { onChanged?: () => void }) {
   const [search, setSearch] = useState("");
   const [busyUser, setBusyUser] = useState<string | null>(null);
   const [confirmAll, setConfirmAll] = useState("");
+  // Sync-password desk state: the code just minted for a user (shown ONCE),
+  // and which user currently has the custom-password input open.
+  const [justIssued, setJustIssued] = useState<Record<string, string>>({});
+  const [customFor, setCustomFor] = useState<string | null>(null);
+  const [customValue, setCustomValue] = useState("");
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setBusyUser("*");
@@ -82,6 +87,35 @@ export default function AccessTab({ onChanged }: { onChanged?: () => void }) {
     }
   };
 
+  // ---- Sync password (device synchronization credential) ----
+  const passwordAction = async (u: DevLicenseUser, action: "regenerate" | "set", password?: string) => {
+    setBusyUser(u.id);
+    try {
+      const res = await devLicensePatch({ userId: u.id, passwordAction: action, password });
+      if (action === "regenerate" && res.password) {
+        setJustIssued((m) => ({ ...m, [u.id]: res.password as string }));
+        setCustomFor(null);
+        setCustomValue("");
+        toast.success(`Sync password issued for ${u.name} — copy it now, it is shown once`);
+      } else {
+        setJustIssued((m) => {
+          const next = { ...m };
+          delete next[u.id];
+          return next;
+        });
+        setCustomFor(null);
+        setCustomValue("");
+        toast.success(`Custom sync password saved for ${u.name} — tell them the password in person`);
+      }
+      await load(true);
+      onChanged?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not update the sync password");
+    } finally {
+      setBusyUser(null);
+    }
+  };
+
   const revoke = async (payload: { sessionId?: string; userId?: string; deviceId?: string; all?: boolean }, label: string) => {
     try {
       const res = await devSessionPatch(payload);
@@ -96,6 +130,10 @@ export default function AccessTab({ onChanged }: { onChanged?: () => void }) {
   const copyKey = (key: string | null) => {
     if (!key) return;
     void navigator.clipboard?.writeText(key).then(() => toast.success("License key copied")).catch(() => toast.error("Copy failed"));
+  };
+
+  const copyText = (text: string, what: string) => {
+    void navigator.clipboard?.writeText(text).then(() => toast.success(`${what} copied`)).catch(() => toast.error("Copy failed"));
   };
 
   const revokeUserAll = async (s: DevSessionRow) => {
@@ -127,7 +165,7 @@ export default function AccessTab({ onChanged }: { onChanged?: () => void }) {
       </SectionCard>
 
       {/* ---- License desk ---- */}
-      <SectionCard icon={KeyRound} title="Access licenses" desc="Every registered artisan holds a license key. Inactive accounts can sign in but see the activation notice until you switch them on.">
+      <SectionCard icon={KeyRound} title="Access licenses & sync passwords" desc="Every registered artisan holds a license key, and every account (artisan or engineer) carries a device sync password — the password a NEW phone asks for once before PIN sign-in works on it. Regenerate it here for any user.">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -149,67 +187,129 @@ export default function AccessTab({ onChanged }: { onChanged?: () => void }) {
         </div>
 
         <div className="mt-3 rounded-xl border border-border overflow-hidden">
-          <div className="max-h-96 overflow-y-auto brewops-scroll">
-            <table className="w-full text-sm">
+          <div className="max-h-[28rem] overflow-auto brewops-scroll">
+            <table className="w-full text-sm min-w-[640px]">
               <thead className="sticky top-0 bg-secondary/80 backdrop-blur">
                 <tr className="text-left text-[10px] uppercase tracking-widest text-muted-foreground">
                   <th className="px-3 py-2 font-bold">Account</th>
                   <th className="px-3 py-2 font-bold">License key</th>
                   <th className="px-3 py-2 font-bold">Status</th>
+                  <th className="px-3 py-2 font-bold">Sync password</th>
                   <th className="px-3 py-2 font-bold text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {(users === null) && (
-                  <tr><td colSpan={4} className="px-3 py-6 text-center text-xs text-muted-foreground">Loading accounts…</td></tr>
+                  <tr><td colSpan={5} className="px-3 py-6 text-center text-xs text-muted-foreground">Loading accounts…</td></tr>
                 )}
                 {users !== null && filtered.length === 0 && (
-                  <tr><td colSpan={4} className="px-3 py-6 text-center text-xs text-muted-foreground">No accounts match.</td></tr>
+                  <tr><td colSpan={5} className="px-3 py-6 text-center text-xs text-muted-foreground">No accounts match.</td></tr>
                 )}
                 {filtered.map((u) => (
-                  <tr key={u.id} className="border-t border-border">
-                    <td className="px-3 py-2.5">
-                      <p className="font-semibold leading-tight">{u.name}{u.role === "ADMIN" && <span className="ml-1.5 rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-primary">Engineer</span>}</p>
-                      <p className="text-[11px] text-muted-foreground">{u.email}{u.trade ? ` · ${u.trade.toLowerCase()}` : ""}</p>
-                    </td>
-                    <td className="px-3 py-2.5">
-                      {u.licenseKey ? (
-                        <button onClick={() => copyKey(u.licenseKey)} className="font-mono text-xs font-semibold tracking-wider hover:text-primary transition-colors" title="Copy key">
-                          {u.licenseKey}
+                  <Fragment key={u.id}>
+                    <tr className="border-t border-border">
+                      <td className="px-3 py-2.5">
+                        <p className="font-semibold leading-tight">{u.name}{u.role === "ADMIN" && <span className="ml-1.5 rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-primary">Engineer</span>}</p>
+                        <p className="text-[11px] text-muted-foreground">{u.email}{u.trade ? ` · ${u.trade.toLowerCase()}` : ""}</p>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {u.licenseKey ? (
+                          <button onClick={() => copyKey(u.licenseKey)} className="font-mono text-xs font-semibold tracking-wider hover:text-primary transition-colors" title="Copy key">
+                            {u.licenseKey}
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-muted-foreground italic">not issued</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-bold ${u.licenseActive ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500" : "border-amber-500/40 bg-amber-500/10 text-amber-500"}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${u.licenseActive ? "bg-emerald-500" : "bg-amber-500"}`} />
+                          {u.licenseActive ? "Active" : "Inactive"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {justIssued[u.id] ? (
+                          <button
+                            onClick={() => copyText(justIssued[u.id], "Sync password")}
+                            className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 font-mono text-xs font-bold tracking-widest text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                            title="Tap to copy — shown only this once"
+                          >
+                            {justIssued[u.id]} ⧉
+                          </button>
+                        ) : u.hasPassword ? (
+                          <span className="text-[11px] text-muted-foreground">Set{u.pwdChangedAt ? ` · ${fmtAgo(u.pwdChangedAt)}` : ""}</span>
+                        ) : (
+                          <span className="text-[11px] italic text-muted-foreground">Not set</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => void licenseAction({ userId: u.id, licenseActive: !u.licenseActive })}
+                          className={`rounded-lg px-2.5 py-1.5 text-[11px] font-bold transition-colors ${u.licenseActive ? "border border-amber-500/40 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20" : "bg-emerald-600 text-white hover:opacity-90"}`}
+                        >
+                          {u.licenseActive ? "Deactivate" : "Activate"}
                         </button>
-                      ) : (
-                        <span className="text-[11px] text-muted-foreground italic">not issued</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-bold ${u.licenseActive ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500" : "border-amber-500/40 bg-amber-500/10 text-amber-500"}`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${u.licenseActive ? "bg-emerald-500" : "bg-amber-500"}`} />
-                        {u.licenseActive ? "Active" : "Inactive"}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                      <button
-                        onClick={() => void licenseAction({ userId: u.id, licenseActive: !u.licenseActive })}
-                        className={`rounded-lg px-2.5 py-1.5 text-[11px] font-bold transition-colors ${u.licenseActive ? "border border-amber-500/40 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20" : "bg-emerald-600 text-white hover:opacity-90"}`}
-                      >
-                        {u.licenseActive ? "Deactivate" : "Activate"}
-                      </button>
-                      <button
-                        onClick={() => void licenseAction({ userId: u.id, regenerate: true })}
-                        className="ml-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-semibold hover:bg-accent transition-colors"
-                        title="Issue a fresh license key"
-                      >
-                        New key
-                      </button>
-                    </td>
-                  </tr>
+                        <button
+                          onClick={() => void licenseAction({ userId: u.id, regenerate: true })}
+                          className="ml-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-semibold hover:bg-accent transition-colors"
+                          title="Issue a fresh license key"
+                        >
+                          New key
+                        </button>
+                        <button
+                          onClick={() => void passwordAction(u, "regenerate")}
+                          disabled={busyUser === u.id}
+                          className="ml-1.5 rounded-lg border border-primary/40 bg-primary/10 px-2.5 py-1.5 text-[11px] font-bold text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
+                          title="Mint a new device sync password (shown once)"
+                        >
+                          {busyUser === u.id ? "…" : "Sync pwd"}
+                        </button>
+                        <button
+                          onClick={() => { setCustomFor(customFor === u.id ? null : u.id); setCustomValue(""); }}
+                          className="ml-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-semibold hover:bg-accent transition-colors"
+                          title="Type your own sync password for this user"
+                        >
+                          Custom
+                        </button>
+                      </td>
+                    </tr>
+                    {customFor === u.id && (
+                      <tr className="border-t border-border bg-secondary/20">
+                        <td colSpan={5} className="px-3 py-2.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[11px] font-semibold text-muted-foreground">Custom sync password for {u.name}:</span>
+                            <input
+                              type="text"
+                              value={customValue}
+                              onChange={(e) => setCustomValue(e.target.value)}
+                              placeholder="4–64 characters"
+                              className="min-w-[160px] flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-sm"
+                            />
+                            <button
+                              onClick={() => void passwordAction(u, "set", customValue)}
+                              disabled={customValue.trim().length < 4 || busyUser === u.id}
+                              className="rounded-lg bg-primary px-3 py-1.5 text-[11px] font-bold text-primary-foreground hover:opacity-90 disabled:opacity-40"
+                            >
+                              Save
+                            </button>
+                            <button
+                              onClick={() => { setCustomFor(null); setCustomValue(""); }}
+                              className="rounded-lg border border-border px-3 py-1.5 text-[11px] font-semibold hover:bg-accent"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
           </div>
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground">
-          New artisans are registered from the Team tab with a license ready - they start INACTIVE. Tap a key to copy it.
+          New artisans are registered from the Team tab with a license ready - they start INACTIVE. Tap a key to copy it. A freshly minted sync password is shown once — pass it to the user verbally; it is what any NEW phone asks for before it can sign in.
         </p>
       </SectionCard>
 

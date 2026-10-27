@@ -3,14 +3,15 @@
 // "Install BrewOps" button — shown on BOTH dashboards (engineer sidebar +
 // mobile top bar, which artisan and engineer share). Behaviour:
 //  · Chrome/Edge desktop & Android: fires the real browser install prompt.
-//  · iPhone/iPad Safari: opens a short "Share → Add to Home Screen" guide.
+//  · ANY iPhone/iPad browser (Safari, Chrome, Firefox…): opens the
+//    "Share → Add to Home Screen" guide — Apple allows no other way.
 //  · Already installed (standalone): renders nothing.
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
-import { Download, Plus, Share, X } from "lucide-react";
+import { Download, Info, Plus, Share, X } from "lucide-react";
 import {
-  installAvailable, isStandalone, isIosSafari, onInstallAvailabilityChange, triggerNativeInstall,
+  installAvailable, isIos, isIosSafari, isStandalone, onInstallAvailabilityChange, triggerNativeInstall,
 } from "@/lib/pwa-install";
 
 export default function InstallAppButton({ variant }: { variant: "row" | "icon" }) {
@@ -49,10 +50,10 @@ export default function InstallAppButton({ variant }: { variant: "row" | "icon" 
         } else if (outcome === "dismissed") {
           toast("Install dismissed — the button stays right here", { icon: "ℹ️" });
         } else {
-          setGuide(isIosSafari() ? "ios" : "desktop");
+          setGuide(isIos() ? "ios" : "desktop");
         }
       } else {
-        setGuide(isIosSafari() ? "ios" : "desktop");
+        setGuide(isIos() ? "ios" : "desktop");
       }
     } finally {
       setBusy(false);
@@ -112,17 +113,19 @@ export default function InstallAppButton({ variant }: { variant: "row" | "icon" 
 
             {guide === "ios" ? (
               <ol className="space-y-3 text-[13px] leading-relaxed">
+                {!isIosSafari() && (
+                  <li className="flex gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 p-2.5">
+                    <Info className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+                    <span className="text-[12px]">You&apos;re in <b>Chrome</b> on an iPhone. First <b>open this page in Safari</b> (copy the link and paste it into Safari) — then do the two steps below. Apple only allows installing from Safari.</span>
+                  </li>
+                )}
                 <li className="flex gap-2.5">
                   <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold shrink-0 mt-0.5">1</span>
                   <span>Tap the <b>Share</b> button <Share className="inline h-4 w-4 text-primary -mt-0.5" /> at the bottom of Safari.</span>
                 </li>
                 <li className="flex gap-2.5">
                   <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold shrink-0 mt-0.5">2</span>
-                  <span>Scroll and choose <b>Add to Home Screen</b> <Plus className="inline h-4 w-4 text-primary -mt-0.5" />.</span>
-                </li>
-                <li className="flex gap-2.5">
-                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold shrink-0 mt-0.5">3</span>
-                  <span>Tap <b>Add</b> — the BrewOps icon appears next to your apps.</span>
+                  <span>Scroll and choose <b>Add to Home Screen</b> <Plus className="inline h-4 w-4 text-primary -mt-0.5" />, then tap <b>Add</b>.</span>
                 </li>
               </ol>
             ) : (

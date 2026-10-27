@@ -2,9 +2,10 @@
 
 // Global PWA-install plumbing for BrewOps. The browser fires
 // `beforeinstallprompt` at most once per page load (and only when the app is
-// installable: https + valid manifest + not already installed). We capture it
-// at module scope so ANY button on the page — engineer sidebar, artisan
-// chrome, profile — can claim the same deferred prompt.
+// installable: https + valid manifest + service worker + not already
+// installed). We capture it at module scope so ANY button on the page —
+// engineer sidebar, artisan chrome, profile — can claim the same deferred
+// prompt.
 export type InstallPromptEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
@@ -66,10 +67,25 @@ export function isStandalone(): boolean {
   return window.matchMedia?.("(display-mode: standalone)").matches || nav.standalone === true;
 }
 
-/** iPhone / iPad Safari has no beforeinstallprompt — guide the user instead. */
-export function isIosSafari(): boolean {
+/**
+ * ANY iPhone / iPad browser — Safari, Chrome, Firefox, Edge on iOS… they all
+ * run WebKit under Apple's rules, and NONE of them can install a PWA
+ * programmatically. Every iOS browser must be routed to the manual
+ * "Share → Add to Home Screen" guide; Chrome-on-iPhone getting the Android
+ * ⋮-menu steps was the bug this check fixes.
+ */
+export function isIos(): boolean {
   if (typeof navigator === "undefined") return false;
   const ua = navigator.userAgent;
-  const iosDevice = /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
-  return iosDevice && !/CriOS|FxiOS|EdgiOS/.test(ua);
+  return /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+}
+
+/**
+ * iOS *Safari* specifically — the only iOS browser whose Share menu offers a
+ * true standalone "Add to Home Screen". On Chrome/Firefox/Edge for iOS the
+ * guide should first send the user to Safari.
+ */
+export function isIosSafari(): boolean {
+  if (!isIos()) return false;
+  return !/CriOS|FxiOS|EdgiOS/.test(navigator.userAgent);
 }

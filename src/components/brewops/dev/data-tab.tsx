@@ -1,18 +1,36 @@
 "use client";
 
-// Data tab — downloads, server-stored restore points, file restore and the
-// danger zone (activity purge / factory reset).
+// Data tab — downloads, server-stored restore points, file restore, the
+// selective wipe (clear exactly one kind of data) and the danger zone
+// (activity purge / factory reset).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
-  Archive, DatabaseBackup, Download, Factory, HardDriveDownload, History, LoaderCircle,
+  Archive, DatabaseBackup, Download, Eraser, Factory, HardDriveDownload, History, LoaderCircle,
   Plus, Trash2, Upload,
 } from "lucide-react";
 import {
-  devBackupCreate, devBackupDelete, devBackupRestorePoint, devBackups, devReset, devRestore,
-  type DevBackupMeta,
+  devBackupCreate, devBackupDelete, devBackupRestorePoint, devBackups, devDataClear, devDataCounts,
+  devReset, devRestore, type DevBackupMeta, type DevDataCounts,
 } from "@/lib/client-api";
 import { SectionCard, fmtBytes, fmtWhen } from "./shared";
+
+// ---- Selectable entities (label + what exactly goes away) -------------------
+const ENTITIES: { id: string; label: string; desc: string; countKey: string | null }[] = [
+  { id: "statusLogs", label: "Status logs", desc: "Every component status report (round history). Machines, components and accounts stay.", countKey: "statusLogs" },
+  { id: "workOrders", label: "Work orders", desc: "All work orders with their steps, check-ins and evidence. Feedback raised against them closes too.", countKey: "workOrders" },
+  { id: "escalations", label: "Feedback", desc: "All artisan escalations (open and resolved).", countKey: "escalations" },
+  { id: "downtimes", label: "Downtime records", desc: "Machine downtime history.", countKey: "downtimes" },
+  { id: "pmPlans", label: "PM plans", desc: "Maintenance plan templates and their numbered operations. Existing work orders stay.", countKey: "pmPlans" },
+  { id: "components", label: "All components", desc: "Every sub-component on every machine — and their status history goes with them.", countKey: "components" },
+  { id: "machines", label: "All machines", desc: "The whole asset register: machines, their components, PM plans, work orders and history.", countKey: "machines" },
+  { id: "parts", label: "Spares inventory", desc: "The spare-parts store. Components keep existing but lose their spare link.", countKey: "parts" },
+  { id: "users", label: "Artisan accounts", desc: "Every artisan account with their sessions, devices, reports and check-ins. Engineer accounts survive; work orders they merely executed are unassigned, not deleted.", countKey: "users" },
+  { id: "sessions", label: "Live sessions", desc: "Signs everyone out — all phones and PCs return to the login screen. Devices stay trusted.", countKey: "sessions" },
+  { id: "devices", label: "Trusted devices", desc: "Forgets every synchronized phone/PC. The next login on each device asks for the sync password again.", countKey: "devices" },
+  { id: "securityEvents", label: "Security events", desc: "The login/device audit trail (LOGIN_OK, LOGIN_FAIL…).", countKey: "securityEvents" },
+  { id: "photos", label: "Photo storage", desc: "Uploaded photos on the server: component photos, check-in evidence, avatars. Old links stop showing images.", countKey: null },
+];
 
 export default function DataTab({ onChanged }: { onChanged?: () => void }) {
   const [backups, setBackups] = useState<DevBackupMeta[] | null>(null);
@@ -23,15 +41,22 @@ export default function DataTab({ onChanged }: { onChanged?: () => void }) {
   const [pointConfirm, setPointConfirm] = useState("");
   const [clearConfirm, setClearConfirm] = useState("");
   const [resetConfirm, setResetConfirm] = useState("");
+  // ---- Selective wipe state ----
+  const [data, setData] = useState<DevDataCounts | null>(null);
+  const [entity, setEntity] = useState<string | null>(null);
+  const [machineId, setMachineId] = useState("");
+  const [wipeConfirm, setWipeConfirm] = useState("");
+  const [wipeBusy, setWipeBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setCreating(true);
     try {
-      const b = await devBackups();
+      const [b, d] = await Promise.all([devBackups(), devDataCounts()]);
       setBackups(b.backups);
+      setData(d);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not load restore points");
+      toast.error(e instanceof Error ? e.message : "Could not load data console");
     } finally {
       setCreating(false);
     }
@@ -115,10 +140,42 @@ export default function DataTab({ onChanged }: { onChanged?: () => void }) {
       setClearConfirm("");
       setResetConfirm("");
       onChanged?.();
+      await load(true);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Reset failed");
     }
   };
+
+  // ---- Selective wipe ----
+  const countFor = (countKey: string | null): number | null => {
+    if (!data) return null;
+    if (countKey === null) return data.photos?.files ?? 0;
+    return data.counts[countKey] ?? 0;
+  };
+
+  const doWipe = async (target: { entity: string; machineId?: string; label: string }) => {
+    if (wipeConfirm !== "DELETE") {
+      toast.error('Type DELETE in the confirmation box first.');
+      return;
+    }
+    setWipeBusy(true);
+    try {
+      const res = await devDataClear({ entity: target.entity, machineId: target.machineId, confirm: wipeConfirm });
+      const total = Object.values(res.deleted).reduce((a, b) => a + b, 0);
+      toast.success(`${target.label} cleared (${total} record${total === 1 ? "" : "s"})`);
+      setEntity(null);
+      setWipeConfirm("");
+      onChanged?.();
+      await load(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Wipe failed");
+    } finally {
+      setWipeBusy(false);
+    }
+  };
+
+  const selectedEntity = ENTITIES.find((e) => e.id === entity) ?? null;
+  const selectedMachine = data?.machines.find((m) => m.id === machineId) ?? null;
 
   return (
     <div className="space-y-6">
@@ -254,6 +311,93 @@ export default function DataTab({ onChanged }: { onChanged?: () => void }) {
           >
             Restore
           </button>
+        </div>
+      </SectionCard>
+
+      {/* ---- Selective wipe ---- */}
+      <SectionCard
+        icon={Eraser}
+        title="Selective wipe"
+        desc="Clear exactly one kind of data — nothing else is touched. Tap an item, check the count, type DELETE and confirm. Capture a restore point first if you are not sure."
+      >
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+          {ENTITIES.map((e) => {
+            const active = entity === e.id;
+            const n = countFor(e.countKey);
+            return (
+              <button
+                key={e.id}
+                onClick={() => { setEntity(active ? null : e.id); setWipeConfirm(""); }}
+                className={`rounded-xl border p-3 text-left transition-colors ${active ? "border-red-500/50 bg-red-500/5" : "border-border bg-secondary/30 hover:bg-accent/40"}`}
+              >
+                <p className={`text-[13px] font-semibold leading-tight ${active ? "text-red-400" : ""}`}>{e.label}</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">{n === null ? "…" : n} record{n === 1 ? "" : "s"}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        {selectedEntity && (
+          <div className="mt-3 rounded-xl border border-red-500/40 bg-red-500/5 p-4">
+            <p className="text-sm font-semibold text-red-400">Clear {selectedEntity.label.toLowerCase()}</p>
+            <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">{selectedEntity.desc}</p>
+            <div className="mt-3 flex gap-2">
+              <input
+                type="text"
+                value={wipeConfirm}
+                onChange={(e) => setWipeConfirm(e.target.value)}
+                placeholder='Type "DELETE"'
+                className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              />
+              <button
+                onClick={() => void doWipe({ entity: selectedEntity.id, label: selectedEntity.label })}
+                disabled={wipeConfirm !== "DELETE" || wipeBusy}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:opacity-90 transition-opacity disabled:opacity-40 inline-flex items-center gap-1.5"
+              >
+                {wipeBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ---- One targeted machine ---- */}
+        <div className="mt-4 rounded-xl border border-border bg-secondary/30 p-4">
+          <p className="text-sm font-semibold">Wipe a single machine</p>
+          <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+            Target one machine instead of the whole plant: strip its sub-components (history goes with them), or delete the machine entirely with every order, plan and record under it.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <select
+              value={machineId}
+              onChange={(e) => { setMachineId(e.target.value); setWipeConfirm(""); }}
+              className="min-w-[200px] flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm"
+            >
+              <option value="">Pick a machine…</option>
+              {data?.machines.map((m) => (
+                <option key={m.id} value={m.id}>{m.code} — {m.name} ({m.department}) · {m.components} component{m.components === 1 ? "" : "s"}</option>
+              ))}
+            </select>
+          </div>
+          {selectedMachine && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                onClick={() => void doWipe({ entity: "machineComponents", machineId: selectedMachine.id, label: `${selectedMachine.code} components` })}
+                disabled={wipeConfirm !== "DELETE" || wipeBusy || selectedMachine.components === 0}
+                className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
+              >
+                Clear its {selectedMachine.components} component{selectedMachine.components === 1 ? "" : "s"}
+              </button>
+              <button
+                onClick={() => void doWipe({ entity: "machine", machineId: selectedMachine.id, label: `Machine ${selectedMachine.code}` })}
+                disabled={wipeConfirm !== "DELETE" || wipeBusy}
+                className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
+              >
+                Delete machine entirely
+              </button>
+            </div>
+          )}
+          <p className="mt-2 text-[11px] text-muted-foreground">Both buttons share the same safety: type DELETE in the box{selectedEntity ? "" : " above"} first.</p>
         </div>
       </SectionCard>
 

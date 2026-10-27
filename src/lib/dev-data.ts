@@ -156,3 +156,183 @@ export async function factoryReset(): Promise<Record<string, number>> {
   });
   return out;
 }
+
+// ---- Selective wipes (dev console → Data → "Selective wipe") -----------------
+// The owner picks ONE kind of data and clears only that. Every operation runs
+// in one transaction, children before parents (SQLite enforces the FKs), and
+// reports exactly how many rows of each table went away.
+
+/** Live row counts for every selectable entity — powers the impact preview. */
+export async function clearCounts(): Promise<Record<string, number>> {
+  const [
+    statusLogs, workOrders, escalations, downtimes, pmTemplates,
+    components, machines, parts, users, sessions, devices, securityEvents,
+  ] = await Promise.all([
+    db.statusLog.count(),
+    db.workOrder.count(),
+    db.escalation.count(),
+    db.downtime.count(),
+    db.pmTemplate.count(),
+    db.component.count(),
+    db.machine.count(),
+    db.part.count(),
+    db.user.count({ where: { role: { not: "ADMIN" } } }),
+    db.session.count(),
+    db.device.count(),
+    db.securityEvent.count(),
+  ]);
+  return {
+    statusLogs, workOrders, escalations, downtimes,
+    pmPlans: pmTemplates, components, machines, parts,
+    users, sessions, devices, securityEvents,
+  };
+}
+
+/** Machines with their component counts — powers the per-machine wipe picker. */
+export async function machineClearList(): Promise<{ id: string; code: string; name: string; department: string; components: number }[]> {
+  const machines = await db.machine.findMany({
+    select: {
+      id: true, code: true, name: true,
+      department: { select: { name: true } },
+      _count: { select: { components: true } },
+    },
+    orderBy: { code: "asc" },
+  });
+  return machines.map((m) => ({
+    id: m.id,
+    code: m.code,
+    name: m.name,
+    department: m.department.name,
+    components: m._count.components,
+  }));
+}
+
+/**
+ * Clears ONE selectable entity. `machineId` scopes the two machine-targeted
+ * entities (machineComponents / machine) to a single machine.
+ */
+export async function clearEntity(entity: string, machineId?: string): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  await db.$transaction(async (tx) => {
+    switch (entity) {
+      case "statusLogs":
+        out.statusLogs = (await tx.statusLog.deleteMany({})).count;
+        break;
+
+      case "workOrders": // orders + their evidence chain; feedback linked to them closes too
+        out.escalations = (await tx.escalation.deleteMany({ where: { workOrderId: { not: null } } })).count;
+        out.woCheckIns = (await tx.woCheckIn.deleteMany({})).count;
+        out.woSteps = (await tx.woStep.deleteMany({})).count;
+        out.workOrders = (await tx.workOrder.deleteMany({})).count;
+        break;
+
+      case "escalations":
+        out.escalations = (await tx.escalation.deleteMany({})).count;
+        break;
+
+      case "downtimes":
+        out.downtimes = (await tx.downtime.deleteMany({})).count;
+        break;
+
+      case "pmPlans":
+        out.pmOperations = (await tx.pmOperation.deleteMany({})).count;
+        out.pmPlans = (await tx.pmTemplate.deleteMany({})).count;
+        break;
+
+      case "components": // every component plant-wide — their history goes with them
+        out.statusLogs = (await tx.statusLog.deleteMany({})).count;
+        out.components = (await tx.component.deleteMany({})).count;
+        break;
+
+      case "parts": // spare parts; components keep existing but lose the link
+        await tx.component.updateMany({ data: { partId: null } });
+        out.parts = (await tx.part.deleteMany({})).count;
+        break;
+
+      case "machines": // the whole asset register: machines + components + plans + their history
+        out.escalations = (await tx.escalation.deleteMany({})).count;
+        out.woCheckIns = (await tx.woCheckIn.deleteMany({})).count;
+        out.woSteps = (await tx.woStep.deleteMany({})).count;
+        out.workOrders = (await tx.workOrder.deleteMany({})).count;
+        out.statusLogs = (await tx.statusLog.deleteMany({})).count;
+        out.downtimes = (await tx.downtime.deleteMany({})).count;
+        out.pmOperations = (await tx.pmOperation.deleteMany({})).count;
+        out.pmPlans = (await tx.pmTemplate.deleteMany({})).count;
+        out.components = (await tx.component.deleteMany({})).count;
+        out.machines = (await tx.machine.deleteMany({})).count;
+        break;
+
+      case "users": { // artisan accounts only — engineer (ADMIN) accounts survive
+        const arts = await tx.user.findMany({ where: { role: { not: "ADMIN" } }, select: { id: true } });
+        const ids = arts.map((a) => a.id);
+        if (!ids.length) break;
+        out.sessions = (await tx.session.deleteMany({ where: { userId: { in: ids } } })).count;
+        out.devices = (await tx.device.deleteMany({ where: { userId: { in: ids } } })).count;
+        out.statusLogs = (await tx.statusLog.deleteMany({ where: { userId: { in: ids } } })).count;
+        out.woCheckIns = (await tx.woCheckIn.deleteMany({ where: { userId: { in: ids } } })).count;
+        out.downtimes = (await tx.downtime.deleteMany({ where: { reportedById: { in: ids } } })).count;
+        out.escalations = (await tx.escalation.deleteMany({
+          where: { OR: [{ raisedById: { in: ids } }, { handledById: { in: ids } }, { reroutedToId: { in: ids } }] },
+        })).count;
+        // work orders CREATED by artisans are deleted outright; orders merely
+        // ASSIGNED to them survive, just unassigned
+        const theirWos = await tx.workOrder.findMany({ where: { createdById: { in: ids } }, select: { id: true } });
+        const woIds = theirWos.map((w) => w.id);
+        if (woIds.length) {
+          out.escalations = (out.escalations ?? 0) + (await tx.escalation.deleteMany({ where: { workOrderId: { in: woIds } } })).count;
+          out.woSteps = (await tx.woStep.deleteMany({ where: { workOrderId: { in: woIds } } })).count;
+          out.woCheckIns = (out.woCheckIns ?? 0) + (await tx.woCheckIn.deleteMany({ where: { workOrderId: { in: woIds } } })).count;
+          out.workOrders = (await tx.workOrder.deleteMany({ where: { id: { in: woIds } } })).count;
+        }
+        await tx.workOrder.updateMany({ where: { assignedToId: { in: ids } }, data: { assignedToId: null } });
+        await tx.machine.updateMany({ where: { ownerId: { in: ids } }, data: { ownerId: null } });
+        out.users = (await tx.user.deleteMany({ where: { id: { in: ids } } })).count;
+        break;
+      }
+
+      case "sessions": // kick everyone back to the login screen (devices stay trusted)
+        out.sessions = (await tx.session.deleteMany({})).count;
+        break;
+
+      case "devices": // forget every synchronized phone/PC → password asked again on next login
+        out.devices = (await tx.device.deleteMany({})).count;
+        break;
+
+      case "securityEvents":
+        out.securityEvents = (await tx.securityEvent.deleteMany({})).count;
+        break;
+
+      case "machineComponents": { // one machine: components + their status history + related feedback
+        if (!machineId) throw new Error("machineId is required.");
+        const comps = await tx.component.findMany({ where: { machineId }, select: { id: true } });
+        const cids = comps.map((c) => c.id);
+        out.statusLogs = cids.length ? (await tx.statusLog.deleteMany({ where: { componentId: { in: cids } } })).count : 0;
+        out.escalations = cids.length ? (await tx.escalation.deleteMany({ where: { componentId: { in: cids } } })).count : 0;
+        out.components = (await tx.component.deleteMany({ where: { machineId } })).count;
+        break;
+      }
+
+      case "machine": { // one machine ENTIRELY: its orders, plans, history, components, then the machine
+        if (!machineId) throw new Error("machineId is required.");
+        out.escalations = (await tx.escalation.deleteMany({ where: { machineId } })).count;
+        out.woCheckIns = (await tx.woCheckIn.deleteMany({ where: { machineId } })).count;
+        const wos = await tx.workOrder.findMany({ where: { machineId }, select: { id: true } });
+        out.woSteps = wos.length ? (await tx.woStep.deleteMany({ where: { workOrderId: { in: wos.map((w) => w.id) } } })).count : 0;
+        out.workOrders = (await tx.workOrder.deleteMany({ where: { machineId } })).count;
+        const comps = await tx.component.findMany({ where: { machineId }, select: { id: true } });
+        const cids = comps.map((c) => c.id);
+        out.statusLogs = cids.length ? (await tx.statusLog.deleteMany({ where: { componentId: { in: cids } } })).count : 0;
+        out.downtimes = (await tx.downtime.deleteMany({ where: { machineId } })).count;
+        out.pmOperations = (await tx.pmOperation.deleteMany({ where: { template: { machineId } } })).count;
+        out.pmPlans = (await tx.pmTemplate.deleteMany({ where: { machineId } })).count;
+        out.components = (await tx.component.deleteMany({ where: { machineId } })).count;
+        out.machines = (await tx.machine.deleteMany({ where: { id: machineId } })).count;
+        break;
+      }
+
+      default:
+        throw new Error("Unknown data entity.");
+    }
+  });
+  return out;
+}

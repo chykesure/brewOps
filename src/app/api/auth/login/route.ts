@@ -115,7 +115,7 @@ export async function POST(req: NextRequest) {
       await logSecurityEvent({ userId: user.id, email: mail, kind: "LOGIN_FAIL", detail: "Unsynchronized device: work password required", ip, ua });
       return NextResponse.json(
         {
-          error: "This device is not synchronized yet. Enter your work password to synchronize it.",
+          error: "This device is not synchronized yet. Enter sync password to synchronize it.",
           needsPassword: true,
         },
         { status: 403 },
