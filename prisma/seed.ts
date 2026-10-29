@@ -22,7 +22,19 @@ function at(dayOffset: number, hour: number, minute = 0): Date {
 }
 
 async function main() {
+  // Safety guard — never wipe a database that already holds accounts unless
+  // the operator explicitly asked for it. Protects production data on the cloud DB.
+  const force = process.argv.includes("--force");
+  const existingUsers = await prisma.user.count();
+  if (existingUsers > 0 && !force) {
+    console.log(`Seed cancelled — the database already holds ${existingUsers} user(s).`);
+    console.log("To WIPE everything and reseed the demo data, run:  bun prisma/seed.ts --force");
+    return;
+  }
   console.log("Clearing existing data…");
+  // Escalation rows reference machines / users through database-enforced
+  // foreign keys on PostgreSQL — they must be cleared first.
+  await prisma.escalation.deleteMany();
   await prisma.statusLog.deleteMany();
   await prisma.woStep.deleteMany();
   await prisma.workOrder.deleteMany();
@@ -419,37 +431,51 @@ async function main() {
     return d;
   };
   const planDefs = [
-    { code: "MP-881", title: "Daily CIP Supply Pump Seal & Param Check", frequency: "DAILY", priority: "HIGH", trade: "MECHANICAL", durationMin: 20, machine: "CIP-301", nextDueAt: T(0, 7), ops: [
-      { subAssembly: "MECHANICAL SEAL", trade: "MECHANICAL", tasks: "Inspect The Mechanical Seal For Any Product Or Caustic Leakage\nCheck The Seal Flush Line Is Flowing And Lines Are Not Blocked\nWipe The Seal Area Dry And Mark Today's Inspection Date With Chalk" },
-      { subAssembly: "DRIVE MOTOR", trade: "MECHANICAL", tasks: "Check Motor Running Current On The Panel And Compare With Nameplate FLA\nCheck For Abnormal Noise, Heat Or Vibration On The Pump Set\nRecord Discharge Pressure And Tank Conductivity In The Daily Log" },
-    ] },
-    { code: "MP-882", title: "Mthly Mash Pump P-101 Mech Inspect", frequency: "MONTHLY", priority: "NORMAL", trade: "MECHANICAL", durationMin: 60, machine: "P-101", nextDueAt: T(5, 9), ops: [
-      { subAssembly: "PUMP CASING", trade: "MECHANICAL", tasks: "Check The Pump Body For Accumulation Of Solids\nClean The Sump And Strainer Housing, Report Any Abnormal Debris" },
-      { subAssembly: "PROXIMITY SENSOR", trade: "ELECTRICAL", tasks: "Check The Condition Of The Proximity Sensor And Clean Accumulated Dust On The Sensor\nCheck The Condition Of Metallic Plate Infront Of The Sensor" },
-      { subAssembly: "GEAR BOX", trade: "MECHANICAL", tasks: "Clean Body Of The Main Drives & Machine Area\nColour Indicates Residue And Severe Thermal Decomposition Replace Oil If Any Of These Were Observed\nCheck The Gear Box Oil Levels And The Quality Of The Oil, Cloudy And Floucculent Appearance Indicates Water Contamination\nCheck Main Drive Foundation Bolts For Tightness\nCheck Motor Cable Gland To Terminal Box\nInspect Cable Terminals For Burns\nDocument All Findings & Report Asap Any Abnormality" },
-    ] },
-    { code: "MP-878", title: "3-Weekly Inspection CIP Tank Elements", frequency: "THREE_WEEKLY", priority: "HIGH", trade: "MECHANICAL", durationMin: 45, machine: "CIP-302", nextDueAt: T(3, 8), ops: [
-      { subAssembly: "CAUSTIC SODA TANK", trade: "MECHANICAL", tasks: "Check The Functionality Of Level Transmitter On The HMI And The Level Switch\nCheck For Any Caustic Leakage On The Transmitters, If Any Call For Repair" },
-      { subAssembly: "MANUAL DISCHARGE VALVE", trade: "MECHANICAL", tasks: "Inspect The Valve For Any Caustic Leakages, If Any Call For Repair" },
-      { subAssembly: "TRANSFER PUMP", trade: "MECHANICAL", tasks: "Inspect The Pump For Any Caustic Leakages And Abnormal Noise, If Any Call For Repair" },
-    ] },
-    { code: "MP-889", title: "3Wkly Inspectn Conc Caustic Tank Element", frequency: "THREE_WEEKLY", priority: "NORMAL", trade: "MECHANICAL", durationMin: 30, machine: "CIP-302", nextDueAt: T(6, 8), ops: [
-      { subAssembly: "LEVEL TRANSMITTER", trade: "ELECTRICAL", tasks: "Check The Functionality Of Level Transmitter On The SCADA" },
-      { subAssembly: "DRAINAGE PNEUMATIC VALVE", trade: "MECHANICAL", tasks: "Check This Pilot Air Hose Supply To The Valves, If Properly Connected\nCheck For Air Leakages And Rectify\nInspect The Valve For Any Caustic Leakages, If Any Call For Repair" },
-    ] },
-    { code: "MP-233", title: "Wkly Brewhouse Panel & Sensor Electrical Inspect", frequency: "WEEKLY", priority: "NORMAL", trade: "ELECTRICAL", durationMin: 40, machine: "HX-105", nextDueAt: T(4, 10), ops: [
-      { subAssembly: "TEMP SENSOR PANEL", trade: "ELECTRICAL", tasks: "Check Terminal Tightness On The Temperature Transmitter Panel\nLook For Discoloration Or Burns On Cable Terminals\nConfirm Cable Glands Are Sealed Against Steam Ingress" },
-      { subAssembly: "CONTROL PANEL", trade: "ELECTRICAL", tasks: "Test Panel Indicator Lamps And HMI Alarms\nMeasure And Record Panel Supply Voltage\nVerify Earth Bonding Is Intact" },
-    ] },
-    { code: "MP-510", title: "Biweekly Glycol Chiller Pump Checks", frequency: "BIWEEKLY", priority: "NORMAL", trade: "MECHANICAL", durationMin: 30, machine: "CT-203", nextDueAt: T(7, 9), ops: [
-      { subAssembly: "GLYCOL PUMP", trade: "MECHANICAL", tasks: "Inspect Pump Seal For Glycol Weeping, If Any Call For Repair\nCheck Suction And Discharge Pressures And Record Values" },
-      { subAssembly: "SOLENOID VALVE", trade: "ELECTRICAL", tasks: "Confirm The Valve Cycles Correctly On The HMI Signal Test\nInspect Coil Housing For Moisture Ingress" },
-    ] },
-    { code: "MP-470", title: "Annual Air Compressor Major Service", frequency: "YEARLY", priority: "HIGH", trade: "MECHANICAL", durationMin: 240, machine: "CMP-401", nextDueAt: T(23, 7), ops: [
-      { subAssembly: "COMPRESSOR UNIT", trade: "MECHANICAL", tasks: "Change Air Filter Element And Oil Separator\nSample And Replace Compressor Oil, Check For Thermal Decomposition\nCheck Belt Tension And Coupling Alignment" },
-      { subAssembly: "MOTOR ELECTRICAL", trade: "ELECTRICAL", tasks: "Megger Test Motor Windings And Record Values\nInspect Cable Terminals For Burns\nVerify Overload Relay Settings Against Nameplate FLA" },
-      { subAssembly: "SAFETY DEVICES", trade: "MECHANICAL", tasks: "Calibrate Pressure Switch And Record Set Points\nTest Safety Relief Valve, If Faulty Replace Immediately" },
-    ] },
+    {
+      code: "MP-881", title: "Daily CIP Supply Pump Seal & Param Check", frequency: "DAILY", priority: "HIGH", trade: "MECHANICAL", durationMin: 20, machine: "CIP-301", nextDueAt: T(0, 7), ops: [
+        { subAssembly: "MECHANICAL SEAL", trade: "MECHANICAL", tasks: "Inspect The Mechanical Seal For Any Product Or Caustic Leakage\nCheck The Seal Flush Line Is Flowing And Lines Are Not Blocked\nWipe The Seal Area Dry And Mark Today's Inspection Date With Chalk" },
+        { subAssembly: "DRIVE MOTOR", trade: "MECHANICAL", tasks: "Check Motor Running Current On The Panel And Compare With Nameplate FLA\nCheck For Abnormal Noise, Heat Or Vibration On The Pump Set\nRecord Discharge Pressure And Tank Conductivity In The Daily Log" },
+      ]
+    },
+    {
+      code: "MP-882", title: "Mthly Mash Pump P-101 Mech Inspect", frequency: "MONTHLY", priority: "NORMAL", trade: "MECHANICAL", durationMin: 60, machine: "P-101", nextDueAt: T(5, 9), ops: [
+        { subAssembly: "PUMP CASING", trade: "MECHANICAL", tasks: "Check The Pump Body For Accumulation Of Solids\nClean The Sump And Strainer Housing, Report Any Abnormal Debris" },
+        { subAssembly: "PROXIMITY SENSOR", trade: "ELECTRICAL", tasks: "Check The Condition Of The Proximity Sensor And Clean Accumulated Dust On The Sensor\nCheck The Condition Of Metallic Plate Infront Of The Sensor" },
+        { subAssembly: "GEAR BOX", trade: "MECHANICAL", tasks: "Clean Body Of The Main Drives & Machine Area\nColour Indicates Residue And Severe Thermal Decomposition Replace Oil If Any Of These Were Observed\nCheck The Gear Box Oil Levels And The Quality Of The Oil, Cloudy And Floucculent Appearance Indicates Water Contamination\nCheck Main Drive Foundation Bolts For Tightness\nCheck Motor Cable Gland To Terminal Box\nInspect Cable Terminals For Burns\nDocument All Findings & Report Asap Any Abnormality" },
+      ]
+    },
+    {
+      code: "MP-878", title: "3-Weekly Inspection CIP Tank Elements", frequency: "THREE_WEEKLY", priority: "HIGH", trade: "MECHANICAL", durationMin: 45, machine: "CIP-302", nextDueAt: T(3, 8), ops: [
+        { subAssembly: "CAUSTIC SODA TANK", trade: "MECHANICAL", tasks: "Check The Functionality Of Level Transmitter On The HMI And The Level Switch\nCheck For Any Caustic Leakage On The Transmitters, If Any Call For Repair" },
+        { subAssembly: "MANUAL DISCHARGE VALVE", trade: "MECHANICAL", tasks: "Inspect The Valve For Any Caustic Leakages, If Any Call For Repair" },
+        { subAssembly: "TRANSFER PUMP", trade: "MECHANICAL", tasks: "Inspect The Pump For Any Caustic Leakages And Abnormal Noise, If Any Call For Repair" },
+      ]
+    },
+    {
+      code: "MP-889", title: "3Wkly Inspectn Conc Caustic Tank Element", frequency: "THREE_WEEKLY", priority: "NORMAL", trade: "MECHANICAL", durationMin: 30, machine: "CIP-302", nextDueAt: T(6, 8), ops: [
+        { subAssembly: "LEVEL TRANSMITTER", trade: "ELECTRICAL", tasks: "Check The Functionality Of Level Transmitter On The SCADA" },
+        { subAssembly: "DRAINAGE PNEUMATIC VALVE", trade: "MECHANICAL", tasks: "Check This Pilot Air Hose Supply To The Valves, If Properly Connected\nCheck For Air Leakages And Rectify\nInspect The Valve For Any Caustic Leakages, If Any Call For Repair" },
+      ]
+    },
+    {
+      code: "MP-233", title: "Wkly Brewhouse Panel & Sensor Electrical Inspect", frequency: "WEEKLY", priority: "NORMAL", trade: "ELECTRICAL", durationMin: 40, machine: "HX-105", nextDueAt: T(4, 10), ops: [
+        { subAssembly: "TEMP SENSOR PANEL", trade: "ELECTRICAL", tasks: "Check Terminal Tightness On The Temperature Transmitter Panel\nLook For Discoloration Or Burns On Cable Terminals\nConfirm Cable Glands Are Sealed Against Steam Ingress" },
+        { subAssembly: "CONTROL PANEL", trade: "ELECTRICAL", tasks: "Test Panel Indicator Lamps And HMI Alarms\nMeasure And Record Panel Supply Voltage\nVerify Earth Bonding Is Intact" },
+      ]
+    },
+    {
+      code: "MP-510", title: "Biweekly Glycol Chiller Pump Checks", frequency: "BIWEEKLY", priority: "NORMAL", trade: "MECHANICAL", durationMin: 30, machine: "CT-203", nextDueAt: T(7, 9), ops: [
+        { subAssembly: "GLYCOL PUMP", trade: "MECHANICAL", tasks: "Inspect Pump Seal For Glycol Weeping, If Any Call For Repair\nCheck Suction And Discharge Pressures And Record Values" },
+        { subAssembly: "SOLENOID VALVE", trade: "ELECTRICAL", tasks: "Confirm The Valve Cycles Correctly On The HMI Signal Test\nInspect Coil Housing For Moisture Ingress" },
+      ]
+    },
+    {
+      code: "MP-470", title: "Annual Air Compressor Major Service", frequency: "YEARLY", priority: "HIGH", trade: "MECHANICAL", durationMin: 240, machine: "CMP-401", nextDueAt: T(23, 7), ops: [
+        { subAssembly: "COMPRESSOR UNIT", trade: "MECHANICAL", tasks: "Change Air Filter Element And Oil Separator\nSample And Replace Compressor Oil, Check For Thermal Decomposition\nCheck Belt Tension And Coupling Alignment" },
+        { subAssembly: "MOTOR ELECTRICAL", trade: "ELECTRICAL", tasks: "Megger Test Motor Windings And Record Values\nInspect Cable Terminals For Burns\nVerify Overload Relay Settings Against Nameplate FLA" },
+        { subAssembly: "SAFETY DEVICES", trade: "MECHANICAL", tasks: "Calibrate Pressure Switch And Record Set Points\nTest Safety Relief Valve, If Faulty Replace Immediately" },
+      ]
+    },
   ];
   for (const p of planDefs) {
     const machine = machineByCode.get(p.machine);

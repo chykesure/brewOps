@@ -8,6 +8,10 @@ import { snapshotAll } from "@/lib/dev-data";
 
 export const dynamic = "force-dynamic";
 
+function isPostgres(): boolean {
+  return /^postgres/i.test(process.env.DATABASE_URL ?? "");
+}
+
 function dbFilePath(): string {
   const url = process.env.DATABASE_URL || "file:../db/custom.db";
   const raw = url.startsWith("file:") ? url.slice(5) : url;
@@ -25,14 +29,16 @@ function stamp(): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
 }
 
-// GET /api/dev/backup?format=db    → the raw SQLite database file
-// GET /api/dev/backup?format=json  → full-table JSON snapshot (restorable)
+// GET /api/dev/backup?format=db    → raw database file (SQLite mode only;
+//                                    on PostgreSQL this serves the JSON snapshot,
+//                                    because cloud data has no file on disk)
+// GET /api/dev/backup?format=json  → full-table JSON snapshot (restorable, both engines)
 export async function GET(req: NextRequest) {
   if (!(await isDevUnlocked())) return NextResponse.json({ error: "Developer console is locked." }, { status: 401 });
 
   const format = req.nextUrl.searchParams.get("format") ?? "json";
 
-  if (format === "db") {
+  if (format === "db" && !isPostgres()) {
     // Flush the WAL into the main file so the copy is complete and portable.
     await db.$queryRaw`PRAGMA wal_checkpoint(TRUNCATE)`;
     const file = dbFilePath();
@@ -48,6 +54,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  // JSON snapshot — the portable backup that works on every engine.
   const { data, counts } = await snapshotAll();
   const rows = Object.values(counts).reduce((a, b) => a + b, 0);
   await logDevEvent("BACKUP_JSON", `${rows} rows`);

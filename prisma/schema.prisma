@@ -3,13 +3,13 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-// NOTE: SQLite does not support Prisma enums — status fields use String
-// validated against the union types defined in src/lib/types.ts
-
+// NOTE: status fields use String validated against the union types defined in
+// src/lib/types.ts. The database is cloud-hosted PostgreSQL (Supabase free
+// tier) so Render sleep/restarts/redeploys can never reset production data.
 model User {
   id                String      @id @default(cuid())
   name              String

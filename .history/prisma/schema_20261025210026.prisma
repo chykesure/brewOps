@@ -1,0 +1,381 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// NOTE: SQLite does not support Prisma enums — status fields use String
+// validated against the union types defined in src/lib/types.ts
+
+model User {
+  id                String      @id @default(cuid())
+  name              String
+  email             String      @unique
+  pinHash           String
+  passwordHash      String? // strong credential — required to synchronize a new device (see Device)
+  pwdChangedAt      DateTime? // null = still on the initial PIN-equal password, Security module nudges a change
+  avatarUrl         String? // profile photo, shown wherever the user's name appears
+  departmentId      String? // home department — artisans see & report every machine in it
+  department        Department? @relation("UserDepartment", fields: [departmentId], references: [id])
+  branchId          String? // home branch — org can span multiple sites nationwide
+  branch            Branch?     @relation("UserBranch", fields: [branchId], references: [id])
+  role              String      @default("ARTISAN") // ADMIN | ARTISAN
+  trade             String? // e.g. Mechanical, Electrical, Instrumentation
+  shift             String? // A | B | C
+  active            Boolean     @default(true)
+  licenseKey        String?     @unique // access license, e.g. BOPS-7K3M-QP48-XR2T — issued when the account is registered
+  licenseActive     Boolean     @default(true) // artisans registered through the app start INACTIVE until the owner activates them (dev console)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime?   @updatedAt // drives the live pulse on roster changes
+
+  ownedMachines     Machine[]   @relation("MachineOwner")
+  statusLogs        StatusLog[]
+  assignedWorkOrders WorkOrder[] @relation("WoAssignee")
+  createdWorkOrders WorkOrder[] @relation("WoCreator")
+  acknowledgedWorkOrders WorkOrder[] @relation("WoAcknowledger")
+  downtimeReports   Downtime[]  @relation("DowntimeReporter")
+  checkIns          WoCheckIn[]
+  escalationsRaised Escalation[] @relation("EscalationRaiser")
+  escalationsHandled Escalation[] @relation("EscalationHandler")
+  escalationsRerouted Escalation[] @relation("EscalationReroute")
+  devices           Device[]
+  sessions          Session[]
+  securityEvents    SecurityEvent[]
+}
+
+// Trusted device registry — the device-synchronization model. A new phone must be
+// synchronized (approved via the work password) before PIN quick-unlock works on it.
+model Device {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fingerprint String    // client-generated UUID kept in localStorage
+  name        String    // human label, e.g. " Tecno Spark · Chrome"
+  platform    String?   // Android | iOS | Windows | macOS | Linux
+  mobile      Boolean   @default(true)
+  approved    Boolean   @default(false)
+  approvedAt  DateTime?
+  lastSeenAt  DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+
+  sessions    Session[]
+
+  @@unique([userId, fingerprint])
+}
+
+// Server-tracked login session — revocable, expiring, auditable (cybersecurity hardening)
+model Session {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId   String?
+  device     Device?   @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  ip         String?
+  ua         String?
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+
+  @@index([userId])
+}
+
+// Security audit trail — logins, device approvals/revocations, password changes
+model SecurityEvent {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  email     String?
+  kind      String   // LOGIN_OK | LOGIN_FAIL | LOGIN_LOCKED | DEVICE_AUTO_APPROVED | DEVICE_SYNCED | DEVICE_REVOKED | PASSWORD_CHANGED | LOGOUT | LOGOUT_ALL
+  detail    String?
+  ip        String?
+  ua        String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// Owner's console audit trail — every sensitive console operation is recorded:
+// unlock/lock, backups, restore points, resets, license changes, session
+// revocations, maintenance toggles. Written only by the dev console itself.
+model DevEvent {
+  id        String   @id @default(cuid())
+  action    String   // UNLOCK_OK | UNLOCK_FAIL | LOCK | BACKUP_DB | BACKUP_JSON | SNAPSHOT_CREATED | SNAPSHOT_RESTORED | SNAPSHOT_DELETED | RESET_ACTIVITY | RESET_FACTORY | LICENSE_ACTIVATE | LICENSE_DEACTIVATE | LICENSE_REGENERATE | LICENSE_FILL | SESSION_REVOKED | SESSIONS_PURGED | DEVICE_REVOKED | MAINTENANCE_ON | MAINTENANCE_OFF | AUDIT_CLEARED
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// Organisation settings (key-value) — company name, report logo, multi-site scaffolding
+model Settings {
+  key   String @id
+  value String
+}
+
+// Branch / site — the org can delegate the system to other departments & branches nationwide
+model Branch {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  location    String?
+  active      Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+
+  departments Department[]
+  users       User[]       @relation("UserBranch")
+}
+
+// Maintenance Plan — the digitised paper PM template (SAP-style).
+// One row per scanned WO cover sheet: frequency + machine + priority.
+model PmTemplate {
+  id          String        @id @default(cuid())
+  code        String        @unique // Maint.Plan ref, e.g. MP-882
+  title       String // e.g. "Mthly Reception Screw SF01 Mech Inspect"
+  frequency   String        @default("MONTHLY") // DAILY | WEEKLY | BIWEEKLY | THREE_WEEKLY | MONTHLY | QUARTERLY | HALFYEARLY | YEARLY
+  priority    String        @default("NORMAL") // LOW | NORMAL | HIGH | URGENT
+  trade       String        @default("MECHANICAL") // MECHANICAL | ELECTRICAL — dominant trade
+  durationMin Int? // planned execution window
+  machineId   String
+  machine     Machine       @relation("TemplateMachine", fields: [machineId], references: [id])
+  active      Boolean       @default(true)
+  nextDueAt   DateTime      @default(now()) // scheduler fires when now >= nextDueAt
+  lastRunAt   DateTime?
+  createdAt   DateTime      @default(now())
+
+  operations PmOperation[]
+  workOrders WorkOrder[]   @relation("WoTemplate")
+}
+
+// One numbered operation of a PM template (SAP 0010/0020/0030…)
+model PmOperation {
+  id          String     @id @default(cuid())
+  templateId  String
+  template    PmTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  idx         Int // 10, 20, 30 …
+  subAssembly String // e.g. "GEAR BOX"
+  trade       String     @default("MECHANICAL") // MECHANICAL | ELECTRICAL
+  tasks       String // long text — one task per line
+}
+
+model Department {
+  id         String    @id @default(cuid())
+  name       String    @unique
+  branchId   String?
+  branch     Branch?   @relation(fields: [branchId], references: [id])
+  machines   Machine[]
+  users      User[]    @relation("UserDepartment")
+}
+
+model Machine {
+  id            String     @id @default(cuid())
+  code          String     @unique // e.g. P-101
+  name          String // e.g. Mash Kettle Pump
+  departmentId  String
+  department    Department @relation(fields: [departmentId], references: [id])
+  location      String?
+  functionalLoc String? // SAP functional location, e.g. 1Nl-B-BR1-P101-MKP
+  equipmentNo   String? // SAP equipment number, e.g. 10000151
+  pmCycle       String     @default("WEEKLY") // NONE | DAILY | WEEKLY | MONTHLY
+  pmDay         Int        @default(1) // weekday 1=Mon..7=Sun for WEEKLY, day-of-month 1..31 for MONTHLY
+  lat           Float? // GPS latitude of the machine tag (set by the Engineer standing at the machine)
+  lng           Float? // GPS longitude
+  geoRadiusM    Int        @default(150) // allowed check-in distance in meters
+  checkinCode   String?    @unique // 6-char code printed on the machine tag (QR + human-readable)
+  ownerId       String?
+  owner         User?      @relation("MachineOwner", fields: [ownerId], references: [id])
+  active        Boolean    @default(true)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime?  @updatedAt // drives the live pulse when the Engineer edits the machine
+
+  components   Component[]
+  workOrders   WorkOrder[]
+  downtimes    Downtime[]
+  pmTemplates  PmTemplate[] @relation("TemplateMachine")
+  checkIns     WoCheckIn[]
+  escalations  Escalation[]
+}
+
+model Component {
+  id            String      @id @default(cuid())
+  machineId     String
+  machine       Machine     @relation(fields: [machineId], references: [id])
+  name          String // e.g. Drive Motor
+  partCode      String? // e.g. SK-12
+  category      String? // Rotating | Seal | Bearing | Gasket | Instrument | Valve | Electrical
+  currentStatus String      @default("WORKING")
+  partId        String?
+  part          Part?       @relation(fields: [partId], references: [id])
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  statusLogs    StatusLog[]
+}
+
+model StatusLog {
+  id          String    @id @default(cuid())
+  componentId String
+  component   Component @relation(fields: [componentId], references: [id])
+  status      String
+  note        String?
+  photo       String?
+  lat         Float? // GPS stamp at reporting time (on-site evidence)
+  lng         Float?
+  distanceM   Float? // meters from the machine tag — computed server-side
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@index([componentId, createdAt])
+}
+
+model Part {
+  id           String      @id @default(cuid())
+  code         String      @unique
+  name         String
+  stock        Int         @default(0)
+  reorderLevel Int         @default(1)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime?   @updatedAt // drives the live pulse on stock moves
+
+  components   Component[]
+}
+
+model WorkOrder {
+  id           String    @id @default(cuid())
+  code         String    @unique
+  title        String
+  description  String?
+  type         String    @default("PM") // PM | CORRECTIVE
+  priority     String    @default("NORMAL") // LOW | NORMAL | HIGH | URGENT
+  source       String    @default("MANUAL") // MANUAL | PM_PLAN | SCHEDULER
+  frequency    String? // snapshot of plan frequency, e.g. THREE_WEEKLY
+  machineId    String
+  machine      Machine   @relation(fields: [machineId], references: [id])
+  templateId   String?
+  template     PmTemplate? @relation("WoTemplate", fields: [templateId], references: [id])
+  assignedToId String?
+  assignedTo   User?     @relation("WoAssignee", fields: [assignedToId], references: [id])
+  createdById  String
+  createdBy    User      @relation("WoCreator", fields: [createdById], references: [id])
+  status       String    @default("PENDING") // PENDING | ACCEPTED | IN_PROGRESS | COMPLETED | CANCELLED
+  dueDate      DateTime
+  startedAt    DateTime?
+  completedAt  DateTime?
+  feedback     String? // Executioner Feedback (artisan sign-off note)
+  supervisorComment String? // Engineer / supervisor review note
+
+  // Approval loop — a completed order stays on the artisan's dashboard as
+  // "awaiting the Engineer's approval" until it is acknowledged here.
+  acknowledgedAt   DateTime?
+  acknowledgedById String?
+  acknowledgedBy   User? @relation("WoAcknowledger", fields: [acknowledgedById], references: [id])
+  followUpCount    Int       @default(0) // artisan follow-up nudges sent to the Engineer
+  updatedAt        DateTime? @updatedAt // drives the live pulse on status / assignment changes
+  lastNudgeAt      DateTime?
+
+  // ---- Evidence chain (anti office-fraud): proof the work happened at the machine ----
+  verification      String    @default("PENDING") // PENDING | VERIFIED | FLAGGED | OVERRIDE
+  checkInMethod     String?   // QR | CODE | GPS
+  checkInAt         DateTime?
+  checkInLat        Float?
+  checkInLng        Float?
+  checkInDistanceM  Float?    // meters from the machine tag at check-in
+  checkInPhoto      String?   // optional live photo of the machine taken at check-in
+  flagReasons       String?   // newline-joined review flags (e.g. too fast / out of range)
+  evidence          String?   // JSON array of photo URLs captured at completion
+  overrideReason    String?   // Engineer override note (accepts flagged evidence)
+  overrideByName    String?
+
+  createdAt    DateTime  @default(now())
+
+  steps        WoStep[]
+  checkIns     WoCheckIn[]
+  escalations  Escalation[]
+}
+
+model WoStep {
+  id          String    @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id])
+  idx         Int
+  text        String
+  opIdx       Int? // parent operation number, e.g. 10 / 20 / 30
+  opName      String? // sub-assembly label of the parent operation
+  doneAt      DateTime?
+  lat         Float? // GPS stamp when the step was ticked
+  lng         Float?
+  distanceM   Float? // meters from the machine at tick time
+}
+
+// Audit trail of every check-in attempt — including rejected ones (wrong code, out of range)
+model WoCheckIn {
+  id          String    @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  machineId   String
+  machine     Machine   @relation(fields: [machineId], references: [id])
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  method      String    // QR | CODE | GPS
+  code        String?   // code as scanned/typed
+  lat         Float?
+  lng         Float?
+  distanceM   Float?
+  photo       String?   // optional live photo of the machine at check-in
+  result      String    // VERIFIED | FLAGGED | REJECTED
+  reasons     String?
+  createdAt   DateTime  @default(now())
+
+  @@index([workOrderId])
+}
+
+model Downtime {
+  id           String   @id @default(cuid())
+  machineId    String
+  machine      Machine  @relation(fields: [machineId], references: [id])
+  reason       String
+  startedAt    DateTime @default(now())
+  endedAt      DateTime?
+  reportedById String
+  reportedBy   User     @relation("DowntimeReporter", fields: [reportedById], references: [id])
+}
+
+model Seq {
+  id    String @id @default(cuid())
+  key   String @unique
+  value Int    @default(0)
+}
+
+// Artisan feedback loop — an issue raised from the floor that needs the Engineer's action.
+// The Engineer dashboard surfaces OPEN escalations with Quick-fix (dispatch corrective WO)
+// and Reroute (reassign the linked job) one-tap actions.
+model Escalation {
+  id            String     @id @default(cuid())
+  machineId     String
+  machine       Machine    @relation(fields: [machineId], references: [id])
+  componentId   String? // feedback about a particular component of the machine
+  componentName String? // denormalised snapshot — survives component edits
+  workOrderId   String? // raised while executing this work order
+  workOrder     WorkOrder? @relation(fields: [workOrderId], references: [id])
+  raisedById    String
+  raisedBy      User       @relation("EscalationRaiser", fields: [raisedById], references: [id])
+  category      String     @default("OTHER") // NEEDS_SPARES | CANNOT_FIX | FOUND_MORE | REROUTE | SAFETY | OTHER
+  message       String     // what the artisan reported
+  photo         String?    // optional photo of the issue
+  status        String     @default("OPEN") // OPEN | ACK | RESOLVED
+  severity      String     @default("HIGH") // CRITICAL | HIGH | NORMAL
+  handledById   String?
+  handledBy     User?      @relation("EscalationHandler", fields: [handledById], references: [id])
+  handledAt     DateTime?
+  response      String?    // Engineer's response — what was done
+  reroutedToId  String?
+  reroutedTo    User?      @relation("EscalationReroute", fields: [reroutedToId], references: [id])
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([status, createdAt])
+  @@index([machineId])
+}
