@@ -617,6 +617,43 @@ export async function devQuickSignInSet(on: boolean): Promise<{ ok: boolean; on:
   }));
 }
 
+// ---- Dev console: account desk (create & manage accounts without signing in) ----
+
+export interface DevAccountUser {
+  id: string; name: string; email: string; role: string; trade: string | null; shift: string | null;
+  active: boolean; licenseKey: string | null; licenseActive: boolean;
+  hasPassword: boolean; pwdChangedAt: string | null; createdAt: string;
+  openWos: number; machines: number; devices: number; liveSessions: number;
+}
+
+export async function devAccounts(): Promise<{ users: DevAccountUser[] }> {
+  return handle(await fetch("/api/dev/accounts", { cache: "no-store" }));
+}
+
+export async function devAccountCreate(payload: { name: string; email: string; pin: string; role: "ADMIN" | "ARTISAN"; trade?: string; shift?: string }): Promise<{ ok: boolean; id: string; name: string; role: string; licenseKey: string }> {
+  return handle(await fetch("/api/dev/accounts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+}
+
+export async function devAccountPatch(payload: { userId: string; action: "update" | "pin"; name?: string; email?: string; role?: "ADMIN" | "ARTISAN"; trade?: string | null; shift?: string; active?: boolean; pin?: string }): Promise<{ ok: boolean }> {
+  return handle(await fetch("/api/dev/accounts", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+}
+
+export async function devAccountDelete(payload: { userId: string; confirm: string }): Promise<{ ok: boolean; deleted: Record<string, number> }> {
+  return handle(await fetch("/api/dev/accounts", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+}
+
 // ---- PWA install (login-opts is public & cosmetic) ----
 
 export async function fetchLoginOpts(): Promise<{ quickSignIn: boolean }> {

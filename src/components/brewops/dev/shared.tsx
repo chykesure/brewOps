@@ -84,6 +84,10 @@ export const DEV_ACTION_META: Record<string, { label: string; cls: string }> = {
   AUDIT_CLEARED: { label: "Audit cleared", cls: "border-red-500/40 bg-red-500/10 text-red-400" },
   QUICKSIGNIN_SHOW: { label: "Quick sign-in shown", cls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-400" },
   QUICKSIGNIN_HIDE: { label: "Quick sign-in hidden", cls: "border-amber-500/40 bg-amber-500/10 text-amber-500" },
+  ACCOUNT_CREATE: { label: "Account created", cls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-400" },
+  ACCOUNT_UPDATE: { label: "Account updated", cls: "border-primary/40 bg-primary/10 text-primary" },
+  ACCOUNT_PIN_RESET: { label: "PIN reset", cls: "border-amber-500/40 bg-amber-500/10 text-amber-500" },
+  ACCOUNT_DELETE: { label: "Account deleted", cls: "border-red-500/40 bg-red-500/10 text-red-400" },
 };
 
 export function ActionChip({ action }: { action: string }) {

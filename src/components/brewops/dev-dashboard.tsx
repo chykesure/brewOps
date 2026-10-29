@@ -1,30 +1,33 @@
 "use client";
 
 // The owner's private developer console — reached only after the Shift+Alt+B
-// PIN gate. Tabbed layout: Overview · Trends · Access · Data · Audit.
+// PIN gate. Tabbed layout: Overview · Trends · Access · Accounts · Data · Audit.
 // Overview: live counters + the maintenance-mode master switch.
 // Trends:   per-day usage charts. Access: licenses + sessions/devices.
+// Accounts: mint & manage accounts (works on an empty database — bootstrap).
 // Data:     backups, restore points, resets. Audit: the operation trail.
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   Activity, ClipboardList, CircleDollarSign, Cpu, Database, DoorOpen, Gauge, KeyRound,
   LoaderCircle, Lock, MonitorSmartphone, PieChart, Power, RefreshCw, ScrollText,
-  Users, Wrench,
+  UserPlus, Users, Wrench,
 } from "lucide-react";
 import { devLock, devMaintenanceSet, devQuickSignInSet, devStats, type DevStats } from "@/lib/client-api";
 import { SectionCard, StatCard } from "./dev/shared";
 import TrendsTab from "./dev/trends-tab";
 import AccessTab from "./dev/access-tab";
+import AccountsTab from "./dev/accounts-tab";
 import DataTab from "./dev/data-tab";
 import AuditTab from "./dev/audit-tab";
 
-type Tab = "overview" | "trends" | "access" | "data" | "audit";
+type Tab = "overview" | "trends" | "access" | "accounts" | "data" | "audit";
 
 const TABS: { id: Tab; label: string; icon: typeof Gauge }[] = [
   { id: "overview", label: "Overview", icon: Gauge },
   { id: "trends", label: "Trends", icon: PieChart },
   { id: "access", label: "Access", icon: KeyRound },
+  { id: "accounts", label: "Accounts", icon: UserPlus },
   { id: "data", label: "Data", icon: Database },
   { id: "audit", label: "Audit", icon: ScrollText },
 ];
@@ -248,6 +251,7 @@ export default function DevDashboard({ onExit }: { onExit: () => void }) {
 
         {tab === "trends" && <TrendsTab />}
         {tab === "access" && <AccessTab onChanged={() => void loadStats(true)} />}
+        {tab === "accounts" && <AccountsTab onChanged={() => void loadStats(true)} />}
         {tab === "data" && <DataTab onChanged={() => void loadStats(true)} />}
         {tab === "audit" && <AuditTab onChanged={() => void loadStats(true)} />}
       </main>

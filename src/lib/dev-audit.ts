@@ -13,6 +13,7 @@ export const DEV_ACTIONS = [
   "RESET_ACTIVITY", "RESET_FACTORY",
   "LICENSE_ACTIVATE", "LICENSE_DEACTIVATE", "LICENSE_REGENERATE", "LICENSE_FILL",
   "SYNC_PASSWORD_SET", "SYNC_PASSWORD_REGENERATE",
+  "ACCOUNT_CREATE", "ACCOUNT_UPDATE", "ACCOUNT_PIN_RESET", "ACCOUNT_DELETE",
   "SESSION_REVOKED", "SESSIONS_PURGED", "DEVICE_REVOKED",
   "MAINTENANCE_ON", "MAINTENANCE_OFF", "AUDIT_CLEARED",
   "QUICKSIGNIN_SHOW", "QUICKSIGNIN_HIDE",
@@ -48,6 +49,10 @@ export function devActionMeta(action: string): { label: string; tone: "ok" | "wa
     case "LICENSE_FILL": return { label: "Missing keys issued", tone: "ok" };
     case "SYNC_PASSWORD_SET": return { label: "Sync password set", tone: "warn" };
     case "SYNC_PASSWORD_REGENERATE": return { label: "Sync password reissued", tone: "warn" };
+    case "ACCOUNT_CREATE": return { label: "Account created", tone: "ok" };
+    case "ACCOUNT_UPDATE": return { label: "Account updated", tone: "info" };
+    case "ACCOUNT_PIN_RESET": return { label: "PIN reset", tone: "warn" };
+    case "ACCOUNT_DELETE": return { label: "Account deleted", tone: "danger" };
     case "DATA_CLEARED": return { label: "Selective data wipe", tone: "danger" };
     case "SESSION_REVOKED": return { label: "Session revoked", tone: "warn" };
     case "SESSIONS_PURGED": return { label: "Sessions purged", tone: "danger" };
