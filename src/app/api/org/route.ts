@@ -46,7 +46,7 @@ export async function PATCH(req: NextRequest) {
     }
     if (body.logoUrl !== undefined) {
       const url = body.logoUrl === null ? "" : String(body.logoUrl);
-      if (url && !url.startsWith("/uploads/")) {
+      if (url && !url.startsWith("/uploads/") && !url.startsWith("/api/files/")) {
         return NextResponse.json({ error: "The logo must be an uploaded image." }, { status: 400 });
       }
       await db.settings.upsert({ where: { key: "logoUrl" }, update: { value: url }, create: { key: "logoUrl", value: url } });

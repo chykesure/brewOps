@@ -13,9 +13,13 @@ export class ApiError extends Error {
 }
 
 async function handle<T>(res: Response): Promise<T> {
-  if (res.status === 401) throw new ApiError("Not authenticated", 401);
+  // Read the body FIRST so the server's own message survives (e.g. the login
+  // route's "Invalid email or PIN."). A bare 401 used to mask every server
+  // message with a generic "Not authenticated", which read like a glitch.
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(json.error || "Request failed", res.status, json);
+  if (!res.ok) {
+    throw new ApiError(json.error || (res.status === 401 ? "Not authenticated" : "Request failed"), res.status, json);
+  }
   return json as T;
 }
 
@@ -658,4 +662,19 @@ export async function devAccountDelete(payload: { userId: string; confirm: strin
 
 export async function fetchLoginOpts(): Promise<{ quickSignIn: boolean }> {
   return handle(await fetch("/api/login-opts", { cache: "no-store" }));
+}
+
+// ---- Artisan effectiveness (Engineer · Trends tab) ----
+
+export interface PerformanceRow {
+  userId: string; name: string; trade: string | null; shift: string | null; active: boolean;
+  completed: number; open: number; overdue: number;
+  onTimePct: number | null; verifiedPct: number | null;
+  avgHours: number | null; fastestHours: number | null;
+  speedPct: number | null; score: number | null;
+}
+
+export async function fetchPerformance(days: number): Promise<{ days: number; plantAvgHours: number | null; rows: PerformanceRow[] }> {
+  const q = new URLSearchParams({ days: String(days) });
+  return handle(await fetch(`/api/performance?${q.toString()}`, { cache: "no-store" }));
 }

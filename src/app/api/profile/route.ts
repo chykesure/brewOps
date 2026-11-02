@@ -23,7 +23,7 @@ export async function PATCH(req: NextRequest) {
 
     if (body.avatarUrl !== undefined) {
       const url = body.avatarUrl === null ? null : String(body.avatarUrl);
-      if (url && !url.startsWith("/uploads/") && !url.startsWith("data:image/")) {
+      if (url && !url.startsWith("/uploads/") && !url.startsWith("/api/files/") && !url.startsWith("data:image/")) {
         return NextResponse.json({ error: "Avatar must be an uploaded image." }, { status: 400 });
       }
       if (url && url.startsWith("data:image/") && url.length > 700_000) {

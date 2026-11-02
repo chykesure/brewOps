@@ -13,6 +13,7 @@ import {
   Activity, ArrowDownRight, ArrowUpRight, CheckCircle2, Eye, LoaderCircle,
   Timer, TriangleAlert, Wrench, XCircle,
 } from "lucide-react";
+import PerformanceBoard from "@/components/brewops/performance-board";
 
 const VERDICT_META: Record<string, { label: string; chip: string; icon: typeof Eye }> = {
   FINE: { label: "Trending fine", chip: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30", icon: CheckCircle2 },
@@ -138,6 +139,8 @@ export default function TrendsView() {
           <p className="text-[9px] md:text-xs text-muted-foreground mt-1">MTTR · avg repair</p>
         </div>
       </section>
+      {/* Artisan effectiveness — who gets tasks done, and how fast */}
+      <PerformanceBoard days={days} />
 
       {/* Fleet charts */}
       <section className="grid md:grid-cols-2 gap-3">

@@ -1,46 +1,51 @@
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "fs";
+import { randomUUID } from "crypto";
+import { mkdir, writeFile } from "fs/promises";
 import path from "path";
-import { randomBytes } from "crypto";
-import { getSessionUser } from "@/lib/session";
+import { getSessionContext } from "@/lib/session";
+import { sameOrigin } from "@/lib/security";
 
 export const dynamic = "force-dynamic";
 
-// POST /api/upload — photo evidence upload (any signed-in user).
-// Accepts multipart/form-data with a "file" field, stores it under
-// public/uploads and returns { url: "/uploads/<name>" }.
-const ALLOWED: Record<string, string> = {
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "image/webp": ".webp",
+// POST /api/upload — saves a photo (avatar, company logo, work-order evidence,
+// check-in proof) and returns the URL it is served from.
+//
+// Files are written to public/uploads (symlinked to /data/uploads on the
+// server) and are ALWAYS served through /api/files/<name> — the Next.js
+// standalone server indexes the public folder once at boot, so files that
+// appear later would 404 as static assets. An API route never has that
+// problem, which is exactly why profile photos "did not show" before.
+
+const MAX_BYTES = 3_000_000; // 3 MB
+const EXT_FOR_TYPE: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
 };
-const MAX_BYTES = 5 * 1024 * 1024; // 5 MB
 
 export async function POST(req: NextRequest) {
-  const user = await getSessionUser();
-  if (!user) return NextResponse.json({ error: "Sign in required." }, { status: 401 });
+  if (!sameOrigin(req)) return NextResponse.json({ error: "Request blocked." }, { status: 403 });
+  const ctx = await getSessionContext();
+  if (!ctx) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
   try {
     const form = await req.formData();
     const file = form.get("file");
-    if (!(file instanceof File) || file.size === 0) {
-      return NextResponse.json({ error: "No photo received." }, { status: 400 });
-    }
-    const ext = ALLOWED[file.type];
-    if (!ext) {
-      return NextResponse.json({ error: "Only JPG, PNG or WebP photos are allowed." }, { status: 400 });
-    }
+    if (!(file instanceof File)) return NextResponse.json({ error: "No file received." }, { status: 400 });
+
+    const ext = EXT_FOR_TYPE[file.type];
+    if (!ext) return NextResponse.json({ error: "Only JPG, PNG or WebP images are allowed." }, { status: 400 });
     if (file.size > MAX_BYTES) {
-      return NextResponse.json({ error: "Photo is larger than 5 MB — please retake it." }, { status: 400 });
+      return NextResponse.json({ error: "Image is too large (max 3 MB). Pick a smaller photo." }, { status: 413 });
     }
 
+    const name = `${Date.now().toString(36)}-${randomUUID().replace(/-/g, "").slice(0, 12)}.${ext}`;
     const dir = path.join(process.cwd(), "public", "uploads");
-    await fs.mkdir(dir, { recursive: true });
-    const name = `${randomBytes(4).toString("hex")}-${randomBytes(4).toString("hex")}${ext}`;
-    await fs.writeFile(path.join(dir, name), Buffer.from(await file.arrayBuffer()));
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, name), Buffer.from(await file.arrayBuffer()));
 
-    return NextResponse.json({ url: `/uploads/${name}` });
+    return NextResponse.json({ ok: true, url: `/api/files/${name}` });
   } catch {
-    return NextResponse.json({ error: "Could not save the photo." }, { status: 500 });
+    return NextResponse.json({ error: "Upload failed. Try again." }, { status: 500 });
   }
 }
