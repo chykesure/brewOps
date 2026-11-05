@@ -541,3 +541,141 @@ export interface TrendsData {
     incidents: TrendIncident[];
   } | null;
 }
+
+// ---- Weekly maintenance checklist (digitised paper sheets) ----
+
+// The four tick states from the paper (Done / Not-in-use / blank) plus the
+// Engineer-facing fault & re-check vocabulary chosen for BrewOps:
+// DONE · FAULT (problem found → note, auto-escalates when machine-linked)
+// SKIPPED (not in use / not applicable) · RECHECK (flag for next week's round)
+export const CHECKLIST_ROW_STATUSES = ["PENDING", "DONE", "FAULT", "SKIPPED", "RECHECK"] as const;
+export type ChecklistRowStatus = (typeof CHECKLIST_ROW_STATUSES)[number];
+export function isChecklistRowStatus(v: string): v is ChecklistRowStatus {
+  return (CHECKLIST_ROW_STATUSES as readonly string[]).includes(v);
+}
+export const CHECKLIST_ROW_STATUS_META: Record<ChecklistRowStatus, { label: string; short: string }> = {
+  PENDING: { label: "Not done", short: "Pending" },
+  DONE:    { label: "Done", short: "Done" },
+  FAULT:   { label: "Fault found", short: "Fault" },
+  SKIPPED: { label: "Skipped / not in use", short: "Skip" },
+  RECHECK: { label: "Needs re-check", short: "Re-check" },
+};
+
+export interface ChecklistRowDTO {
+  id: string;
+  idx: number;
+  machineName: string;
+  machineId: string | null;
+  task: string;
+  plannedMin: number;
+  active: boolean;
+}
+
+export interface ChecklistTemplateDTO {
+  id: string;
+  title: string;
+  trade: string;
+  active: boolean;
+  totalPlannedMin: number; // sum of active rows
+  rows: ChecklistRowDTO[];
+}
+
+export interface ChecklistEntryDTO {
+  id: string;
+  rowId: string;
+  machineName: string;
+  task: string;
+  plannedMin: number;
+  status: ChecklistRowStatus;
+  note: string | null;
+  photo: string | null;
+  doneAt: string | null; // audit stamp — when the artisan ticked it
+  escalationId: string | null;
+  recheckResolvedAt: string | null;
+}
+
+export interface ChecklistCounts {
+  done: number;
+  fault: number;
+  skipped: number;
+  recheck: number;
+  pending: number;
+  total: number;
+}
+
+export interface ChecklistRunDTO {
+  id: string;
+  templateId: string;
+  templateTitle?: string; // admin views only
+  weekStart: string;
+  status: "IN_PROGRESS" | "SUBMITTED" | "ACKNOWLEDGED";
+  startedAt: string;
+  completedAt: string | null;
+  totalPlannedMin: number;
+  totalActualMin: number | null;
+  artisanId: string;
+  artisanName: string;
+  trade: string | null;
+  shift: string | null;
+  ackByName: string | null;
+  ackAt: string | null;
+  ackNote: string | null;
+  counts: ChecklistCounts;
+  entries: ChecklistEntryDTO[]; // history/admin lists may omit entries
+}
+
+export interface ChecklistArtisanData {
+  weekStart: string;
+  templates: ChecklistTemplateDTO[];
+  runs: ChecklistRunDTO[]; // the signed-in artisan's runs for this week (with entries)
+  history: ChecklistRunDTO[]; // their past runs (summary, newest first)
+}
+
+export type ChecklistCellState = "GREEN" | "AMBER" | "RED" | "OPEN" | "NONE";
+
+export interface ChecklistComplianceCell {
+  templateId: string;
+  state: ChecklistCellState;
+  runCount: number;
+  artisanNames: string[];
+  late: boolean; // submitted after the week had ended
+}
+
+export interface ChecklistRankRow {
+  artisanId: string;
+  name: string;
+  trade: string | null;
+  shift: string | null;
+  runs: number;
+  tasksDone: number;
+  tasksTotal: number;
+  completionPct: number; // tasksDone / tasksTotal
+  avgPlannedMin: number | null;
+  avgActualMin: number | null;
+  pacePct: number | null; // actual vs planned — lower is faster
+  faults: number;
+  rechecks: number;
+}
+
+export interface RecheckItem {
+  entryId: string;
+  runId: string;
+  weekStart: string;
+  templateTitle: string;
+  trade: string;
+  artisanName: string;
+  machineName: string;
+  task: string;
+  note: string | null;
+  flaggedAt: string | null;
+}
+
+export interface ChecklistAdminData {
+  weekStart: string;
+  days: number;
+  weeks: { weekStart: string; cells: ChecklistComplianceCell[] }[];
+  templates: ChecklistTemplateDTO[];
+  ranking: ChecklistRankRow[];
+  recheckQueue: RecheckItem[];
+  recentRuns: ChecklistRunDTO[];
+}

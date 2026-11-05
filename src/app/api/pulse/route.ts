@@ -20,6 +20,7 @@ export async function GET() {
     const [
       statusLog, woCreated, woUpdated, woSteps, checkIns, downtime,
       escalations, components, machinesCreated, machinesUpdated, parts, users,
+      checklistRuns, checklistEntries,
     ] = await Promise.all([
       db.statusLog.aggregate({ _max: { createdAt: true }, _count: true }),
       db.workOrder.aggregate({ _max: { createdAt: true }, _count: true }),
@@ -33,6 +34,8 @@ export async function GET() {
       db.machine.aggregate({ _max: { updatedAt: true }, _count: true }),
       db.part.aggregate({ _max: { updatedAt: true }, _count: true }),
       db.user.aggregate({ _max: { updatedAt: true }, _count: true }),
+      db.checklistRun.aggregate({ _max: { updatedAt: true }, _count: true }),
+      db.checklistEntry.aggregate({ _max: { doneAt: true }, _count: true }),
     ]);
 
     const stamp = (d: Date | null, n: number) => `${d ? d.getTime() : 0}:${n}`;
@@ -49,6 +52,8 @@ export async function GET() {
       stamp(machinesUpdated._max.updatedAt, machinesUpdated._count),
       stamp(parts._max.updatedAt, parts._count),
       stamp(users._max.updatedAt, users._count),
+      stamp(checklistRuns._max.updatedAt, checklistRuns._count),
+      stamp(checklistEntries._max.doneAt, checklistEntries._count),
     ].join("|");
 
     return NextResponse.json({ rev, at: new Date().toISOString() });

@@ -10,6 +10,7 @@ datasource db {
 // NOTE: status fields use String validated against the union types defined in
 // src/lib/types.ts. The database is cloud-hosted PostgreSQL (Supabase free
 // tier) so Render sleep/restarts/redeploys can never reset production data.
+
 model User {
   id                String      @id @default(cuid())
   name              String
@@ -44,6 +45,9 @@ model User {
   devices           Device[]
   sessions          Session[]
   securityEvents    SecurityEvent[]
+  checklistRuns     ChecklistRun[] @relation("ChecklistArtisan")
+  checklistAcks     ChecklistRun[] @relation("ChecklistAck")
+  checklistRecheckResolved ChecklistEntry[] @relation("ChecklistRecheckResolver")
 }
 
 // Trusted device registry — the device-synchronization model. A new phone must be
@@ -196,6 +200,7 @@ model Machine {
   pmTemplates  PmTemplate[] @relation("TemplateMachine")
   checkIns     WoCheckIn[]
   escalations  Escalation[]
+  checklistRows ChecklistRow[] @relation("ChecklistRowMachine")
 }
 
 model Component {
@@ -222,7 +227,7 @@ model StatusLog {
   note        String?
   photo       String?
   lat         Float? // GPS stamp at reporting time (on-site evidence)
-  lng         Float?
+  lng         Float? // GPS stamp at reporting time (on-site evidence)
   distanceM   Float? // meters from the machine tag — computed server-side
   userId      String
   user        User      @relation(fields: [userId], references: [id])
@@ -306,7 +311,7 @@ model WoStep {
   opName      String? // sub-assembly label of the parent operation
   doneAt      DateTime?
   lat         Float? // GPS stamp when the step was ticked
-  lng         Float?
+  lng         Float? // GPS stamp when the step was ticked
   distanceM   Float? // meters from the machine at tick time
 }
 
@@ -376,6 +381,96 @@ model Escalation {
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
+  checklistEntry ChecklistEntry? @relation("ChecklistEscalation")
+
   @@index([status, createdAt])
   @@index([machineId])
+}
+
+// ---- Weekly maintenance checklist — the digitised paper sheets ----
+// One sheet = one trade (Electrical / Mechanical) × one Mon–Sun week × one
+// artisan. The Engineer owns the TEMPLATE (rows: equipment + task + planned
+// minutes); the artisan STARTS a run, ticks rows (auto-timer), and SUBMITS.
+// Every tick is timestamped → actual-vs-planned time powers the efficiency
+// ranking, and FAULT rows raise escalations into the existing Engineer loop.
+model ChecklistTemplate {
+  id        String    @id @default(cuid())
+  title     String // e.g. "Weekly Maintenance Electrical Inspection Checklist"
+  trade     String    @default("MECHANICAL") // MECHANICAL | ELECTRICAL
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime? @updatedAt
+
+  rows ChecklistRow[]
+  runs ChecklistRun[]
+}
+
+// One printed line of the sheet. machineName is the paper text; machineId
+// optionally links the row to the live machine registry (escalations + history).
+model ChecklistRow {
+  id          String             @id @default(cuid())
+  templateId  String
+  template    ChecklistTemplate  @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  idx         Int // display order, 10 / 20 / 30 …
+  machineName String
+  machineId   String?
+  machine     Machine?           @relation("ChecklistRowMachine", fields: [machineId], references: [id], onDelete: SetNull)
+  task        String
+  plannedMin  Int                @default(10) // planned Duration (Mins) from the paper
+  active      Boolean            @default(true) // retired rows stay for run history
+  createdAt   DateTime           @default(now())
+
+  entries ChecklistEntry[]
+}
+
+// One filled sheet. The auto-timer: startedAt begins at Start, completedAt is
+// set at Submit — totalActualMin vs totalPlannedMin is the efficiency signal.
+model ChecklistRun {
+  id              String             @id @default(cuid())
+  templateId      String
+  template        ChecklistTemplate  @relation(fields: [templateId], references: [id])
+  weekStart       DateTime // Monday 00:00 (device-local) of the Mon–Sun week
+  artisanId       String
+  artisan         User               @relation("ChecklistArtisan", fields: [artisanId], references: [id])
+  shift           String? // snapshot of the artisan's shift when filling
+  status          String             @default("IN_PROGRESS") // IN_PROGRESS | SUBMITTED | ACKNOWLEDGED
+  startedAt       DateTime           @default(now())
+  completedAt     DateTime?
+  totalPlannedMin Int                @default(0) // snapshot at submit
+  totalActualMin  Float?
+  ackById         String?
+  ackBy           User?              @relation("ChecklistAck", fields: [ackById], references: [id])
+  ackAt           DateTime?
+  ackNote         String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime?          @updatedAt
+
+  entries ChecklistEntry[]
+
+  @@unique([templateId, weekStart, artisanId])
+  @@index([weekStart])
+}
+
+// One ticked line of a run. Machine/task/plannedMin are snapshots so later
+// template edits never rewrite history. doneAt is the tick's audit stamp.
+model ChecklistEntry {
+  id           String            @id @default(cuid())
+  runId        String
+  run          ChecklistRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  rowId        String
+  row          ChecklistRow      @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  machineName  String
+  task         String
+  plannedMin   Int
+  status       String            @default("PENDING") // PENDING | DONE | FAULT | SKIPPED | RECHECK
+  note         String?
+  photo        String?
+  doneAt       DateTime?
+  escalationId String? @unique // FAULT rows auto-raise an escalation (machine-linked rows)
+  escalation   Escalation?       @relation("ChecklistEscalation", fields: [escalationId], references: [id])
+  recheckResolvedAt   DateTime?
+  recheckResolvedById String?
+  recheckResolvedBy   User?     @relation("ChecklistRecheckResolver", fields: [recheckResolvedById], references: [id])
+
+  @@unique([runId, rowId])
 }

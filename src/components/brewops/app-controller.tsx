@@ -14,21 +14,24 @@ import DevDashboard from "@/components/brewops/dev-dashboard";
 import ArtisanHome from "@/components/brewops/views/artisan-home";
 import RoundView from "@/components/brewops/views/round-view";
 import WorksView from "@/components/brewops/views/works-view";
+import ChecklistView from "@/components/brewops/views/checklist-view";
 import AdminDashboard from "@/components/brewops/views/admin-dashboard";
 import AdminMachines from "@/components/brewops/views/admin-machines";
+import AdminChecklists from "@/components/brewops/views/admin-checklists";
 import AdminWorkOrders from "@/components/brewops/views/admin-workorders";
 import TeamView from "@/components/brewops/views/team-view";
 import ReportsView from "@/components/brewops/views/reports-view";
 import TrendsView from "@/components/brewops/views/trends-view";
 import ProfileView from "@/components/brewops/views/profile-view";
-import { Beer, ClipboardList, Gauge, Home, FileText, Radar, TrendingUp, UserRound, UsersRound, Wrench } from "lucide-react";
+import { Beer, ClipboardCheck, ClipboardList, Gauge, Home, FileText, Radar, TrendingUp, UserRound, UsersRound, Wrench } from "lucide-react";
 import { Avatar } from "@/components/brewops/avatar";
 
-type Tab = "home" | "round" | "work" | "dash" | "machines" | "team" | "reports" | "trends" | "profile";
+type Tab = "home" | "round" | "checklist" | "work" | "dash" | "machines" | "checklists" | "team" | "reports" | "trends" | "profile";
 
 const ARTISAN_TABS: { id: Tab; label: string; icon: typeof Home }[] = [
   { id: "home", label: "Home", icon: Home },
   { id: "round", label: "My Round", icon: Radar },
+  { id: "checklist", label: "Checklist", icon: ClipboardCheck },
   { id: "work", label: "Work", icon: ClipboardList },
   { id: "reports", label: "Reports", icon: FileText },
   { id: "trends", label: "Trends", icon: TrendingUp },
@@ -38,6 +41,7 @@ const ADMIN_TABS: { id: Tab; label: string; icon: typeof Home }[] = [
   { id: "dash", label: "Command", icon: Gauge },
   { id: "work", label: "Work", icon: ClipboardList },
   { id: "machines", label: "Registry", icon: Beer },
+  { id: "checklists", label: "Checklists", icon: ClipboardCheck },
   { id: "team", label: "Team", icon: UsersRound },
   { id: "reports", label: "Reports", icon: FileText },
   { id: "trends", label: "Trends", icon: TrendingUp },
@@ -303,6 +307,8 @@ export default function BrewOpsApp() {
           onConsumeStart={() => setRoundStart("round")}
         />
       );
+      case "checklist": return <ChecklistView data={data} />;
+      case "checklists": return <AdminChecklists data={data} />;
       case "dash": return (
         <AdminDashboard
           data={data}

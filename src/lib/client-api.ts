@@ -678,3 +678,88 @@ export async function fetchPerformance(days: number): Promise<{ days: number; pl
   const q = new URLSearchParams({ days: String(days) });
   return handle(await fetch(`/api/performance?${q.toString()}`, { cache: "no-store" }));
 }
+
+
+// ---- Weekly maintenance checklist (digitised paper sheets) ----
+
+import type { ChecklistAdminData, ChecklistArtisanData, ChecklistRowStatus, ChecklistRunDTO, ChecklistTemplateDTO } from "@/lib/types";
+
+export async function fetchChecklistTemplates(): Promise<{ templates: ChecklistTemplateDTO[] }> {
+  return handle(await fetch("/api/checklists/templates", { cache: "no-store" }));
+}
+
+export async function checklistTemplateCreate(title: string, trade: "MECHANICAL" | "ELECTRICAL"): Promise<{ ok: boolean; id: string }> {
+  return handle(await fetch("/api/checklists/templates", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, trade }),
+  }));
+}
+
+export async function checklistTemplatesSave(payload: {
+  templateId: string;
+  title?: string;
+  active?: boolean;
+  rows?: { id?: string; machineName: string; machineId: string | null; task: string; plannedMin: number; active: boolean }[];
+}): Promise<{ ok: boolean; template: ChecklistTemplateDTO | null }> {
+  return handle(await fetch("/api/checklists/templates", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+}
+
+export async function fetchChecklistsWeek(weekStart: string): Promise<ChecklistArtisanData> {
+  const q = new URLSearchParams({ week: weekStart });
+  return handle(await fetch(`/api/checklists/runs?${q.toString()}`, { cache: "no-store" }));
+}
+
+export async function fetchChecklistsAdmin(weekStart: string, days = 30): Promise<ChecklistAdminData> {
+  const q = new URLSearchParams({ view: "admin", week: weekStart, days: String(days) });
+  return handle(await fetch(`/api/checklists/runs?${q.toString()}`, { cache: "no-store" }));
+}
+
+export async function fetchChecklistRun(runId: string): Promise<{ run: ChecklistRunDTO }> {
+  const q = new URLSearchParams({ run: runId });
+  return handle(await fetch(`/api/checklists/runs?${q.toString()}`, { cache: "no-store" }));
+}
+
+export async function checklistStart(templateId: string, weekStart: string): Promise<{ ok: boolean; run: ChecklistRunDTO }> {
+  return handle(await fetch("/api/checklists/runs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "start", templateId, weekStart }),
+  }));
+}
+
+export async function checklistTick(runId: string, entryId: string, status: ChecklistRowStatus, note?: string | null, photo?: string | null): Promise<{ ok: boolean; status: string; escalationId: string | null }> {
+  return handle(await fetch("/api/checklists/runs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "tick", runId, entryId, status, note, photo }),
+  }));
+}
+
+export async function checklistSubmit(runId: string): Promise<{ ok: boolean; run: ChecklistRunDTO }> {
+  return handle(await fetch("/api/checklists/runs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "submit", runId }),
+  }));
+}
+
+export async function checklistAck(runId: string, note?: string): Promise<{ ok: boolean }> {
+  return handle(await fetch("/api/checklists/runs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "ack", runId, note }),
+  }));
+}
+
+export async function checklistResolveRecheck(entryId: string): Promise<{ ok: boolean }> {
+  return handle(await fetch("/api/checklists/runs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "resolveRecheck", entryId }),
+  }));
+}
